@@ -24,6 +24,7 @@ endfunction()
 # ---------------------------------------------------------------------------
 add_library(fe_core STATIC
     src/core/Index.cpp
+    src/core/PathCache.cpp
     src/core/Query.cpp
     src/core/Search.cpp
 )
@@ -78,6 +79,7 @@ if(FE_BUILD_GUI)
         src/app/Theme.cpp
     )
     target_link_libraries(FindEverything PRIVATE fe_platform imgui)
+    target_compile_definitions(FindEverything PRIVATE FE_VERSION="${PROJECT_VERSION}")
     fe_warnings(FindEverything)
 endif()
 

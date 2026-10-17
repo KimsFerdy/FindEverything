@@ -62,6 +62,16 @@ int main() {
             // counter). Keeps CPU near 0% while idle instead of spinning at 60 fps.
             glfwWaitEventsTimeout(0.1);
 
+            // Font zoom: ImGui 1.91 bakes fonts into a texture at a fixed size, so
+            // a new size means rebuilding the atlas and re-uploading it to the GPU.
+            // Must happen between frames.
+            if (app.consumeFontZoomChange()) {
+                ImGui::GetIO().Fonts->Clear();
+                fe::loadFonts(appearance, scaleX * app.fontZoom());
+                ImGui_ImplOpenGL3_DestroyFontsTexture();
+                ImGui_ImplOpenGL3_CreateFontsTexture();
+            }
+
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
@@ -75,6 +85,8 @@ int main() {
             glClear(GL_COLOR_BUFFER_BIT);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             glfwSwapBuffers(window);
+
+            if (app.quitRequested()) glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
     }
 

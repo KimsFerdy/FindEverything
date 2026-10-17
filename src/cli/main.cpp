@@ -1,9 +1,10 @@
 // fe-cli: index a directory tree, then search it from the terminal.
 //
-//   fe-cli [--root DIR]... [--limit N] [--no-meta] QUERY...
+//   fe-cli [--root DIR]... [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...
 //   fe-cli --root ~ ext:pdf invoice
 //   fe-cli                           (no query: index "/" and print stats)
 
+#include "core/PathCache.h"
 #include "core/Query.h"
 #include "core/Search.h"
 #include "platform/Scanner.h"
@@ -23,6 +24,7 @@ double msSince(std::chrono::steady_clock::time_point start) {
 
 int main(int argc, char** argv) {
     fe::ScanOptions opts;
+    fe::SearchOptions searchOpts;
     size_t limit = 50;
     std::string queryText;
 
@@ -34,8 +36,14 @@ int main(int argc, char** argv) {
             limit = std::strtoul(argv[++i], nullptr, 10);
         } else if (arg == "--no-meta") {
             opts.collectMetadata = false;
+        } else if (arg == "--case") {
+            searchOpts.matchCase = true;
+        } else if (arg == "--word") {
+            searchOpts.wholeWord = true;
+        } else if (arg == "--path") {
+            searchOpts.matchPath = true;
         } else if (arg == "-h" || arg == "--help") {
-            std::puts("usage: fe-cli [--root DIR]... [--limit N] [--no-meta] QUERY...");
+            std::puts("usage: fe-cli [--root DIR]... [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...");
             return 0;
         } else {
             if (!queryText.empty()) queryText += ' ';
@@ -54,9 +62,11 @@ int main(int argc, char** argv) {
 
     if (queryText.empty()) return 0;
 
-    fe::Query query = fe::parseQuery(queryText);
+    fe::Query query = fe::parseQuery(queryText, searchOpts);
+    fe::PathCache paths;
+    if (query.matchPath) paths.build(index);
     t0 = std::chrono::steady_clock::now();
-    std::vector<fe::RecordId> results = fe::search(index, query);
+    std::vector<fe::RecordId> results = fe::search(index, query, 0, &paths);
     double searchMs = msSince(t0);
 
     for (size_t i = 0; i < results.size() && i < limit; ++i) {

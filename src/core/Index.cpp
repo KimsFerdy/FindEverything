@@ -8,12 +8,6 @@ char asciiLower(char c) {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
 }
 
-#ifdef _WIN32
-constexpr char kPathSep = '\\';
-#else
-constexpr char kPathSep = '/';
-#endif
-
 }  // namespace
 
 RecordId Index::add(RecordId parent, std::string_view name, uint8_t flags, uint64_t size, int64_t mtime) {
@@ -63,7 +57,7 @@ std::string Index::fullPath(RecordId id) const {
     std::string out;
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
         // Roots like "/" or "C:\" already end in a separator.
-        if (!out.empty() && out.back() != '/' && out.back() != '\\') out += kPathSep;
+        if (!out.empty() && out.back() != '/' && out.back() != '\\') out += kPathSeparator;
         out += *it;
     }
     return out;

@@ -55,10 +55,45 @@ static void testSearch() {
     CHECK(fe::search(idx, fe::parseQuery("beach"), 4) == fe::search(idx, fe::parseQuery("beach"), 1));
 }
 
+static void testSearchOptions() {
+    fe::Index idx;
+    fe::RecordId root = idx.add(fe::kNoParent, "/", fe::kIsDir, 0, 0);
+    fe::RecordId src = idx.add(root, "src", fe::kIsDir, 0, 0);
+    fe::RecordId core = idx.add(src, "Core", fe::kIsDir, 0, 0);
+    idx.add(core, "Index.cpp", 0, 1, 0);
+    idx.add(core, "index_test.cpp", 0, 1, 0);
+    idx.add(root, "reindexer.cpp", 0, 1, 0);
+    fe::PathCache paths;
+    paths.build(idx);
+    CHECK(paths.dirPath(core) == "/src/Core");
+    CHECK(paths.lowerDirPath(core) == "/src/core");
+
+    auto count = [&](const char* text, fe::SearchOptions opts = {}) {
+        return fe::search(idx, fe::parseQuery(text, opts), 1, &paths).size();
+    };
+    fe::SearchOptions matchCase;
+    matchCase.matchCase = true;
+    fe::SearchOptions wholeWord;
+    wholeWord.wholeWord = true;
+    fe::SearchOptions matchPath;
+    matchPath.matchPath = true;
+    fe::SearchOptions filesOnly;
+    filesOnly.kind = fe::SearchOptions::Kind::Files;
+
+    CHECK(count("index") == 3);
+    CHECK(count("Index", matchCase) == 1);
+    CHECK(count("index", wholeWord) == 2);    // "Index.cpp", "index_test.cpp" (not "reindexer")
+    CHECK(count("core cpp") == 0);            // names only
+    CHECK(count("core cpp", matchPath) == 2);
+    CHECK(count("src/core") == 3);            // '/' turns on path matching: Core + its 2 files
+    CHECK(count("src", filesOnly) == 0);
+}
+
 int main() {
     testQueryParsing();
     testFullPath();
     testSearch();
+    testSearchOptions();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;
 }

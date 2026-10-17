@@ -33,8 +33,14 @@ std::vector<std::string> tokenize(std::string_view text) {
 
 }  // namespace
 
-Query parseQuery(std::string_view text) {
+Query parseQuery(std::string_view text, const SearchOptions& options) {
     Query q;
+    q.matchCase = options.matchCase;
+    q.wholeWord = options.wholeWord;
+    q.matchPath = options.matchPath;
+    q.filesOnly = options.kind == SearchOptions::Kind::Files;
+    q.foldersOnly = options.kind == SearchOptions::Kind::Folders;
+
     for (const std::string& raw : tokenize(text)) {
         std::string_view tok = raw;
         bool negate = false;
@@ -61,7 +67,8 @@ Query parseQuery(std::string_view text) {
         } else if (lower == "folder:") {
             q.foldersOnly = true;
         } else {
-            (negate ? q.exclude : q.include).push_back(std::move(lower));
+            if (tok.find_first_of("/\\") != std::string_view::npos) q.matchPath = true;
+            (negate ? q.exclude : q.include).push_back(q.matchCase ? std::string(tok) : std::move(lower));
         }
     }
     return q;

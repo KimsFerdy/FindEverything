@@ -8,6 +8,12 @@
 
 namespace fe {
 
+#ifdef _WIN32
+inline constexpr char kPathSeparator = '\\';
+#else
+inline constexpr char kPathSeparator = '/';
+#endif
+
 // In-memory database of every file and folder.
 //
 // Layout: one flat vector of FileRecord, plus one big string ("name pool") holding

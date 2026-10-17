@@ -1,7 +1,6 @@
 #include "app/MainWindow.h"
 
 #include "app/Theme.h"
-#include "core/Query.h"
 #include "core/Search.h"
 #include "platform/Shell.h"
 
@@ -10,6 +9,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
+
+#ifndef FE_VERSION
+#define FE_VERSION "dev"
+#endif
 
 namespace fe {
 
@@ -71,7 +74,16 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::startIndexing() {
+    if (scanning_) return;
+    if (scanThread_.joinable()) scanThread_.join();  // previous scan, already finished
+
+    scanning_ = true;
+    progress_.entries = 0;
+    progress_.errors = 0;
+    progress_.cancel = false;
     scanStart_ = std::chrono::steady_clock::now();
+
+    // The old index stays searchable while the new one is built.
     scanThread_ = std::thread([this] {
         auto index = std::make_unique<Index>();
         ScanOptions opts;
@@ -84,10 +96,23 @@ void MainWindow::startIndexing() {
     });
 }
 
+bool MainWindow::consumeFontZoomChange() {
+    const bool changed = fontZoomChanged_;
+    fontZoomChanged_ = false;
+    return changed;
+}
+
+void MainWindow::setZoom(float zoom) {
+    zoom = std::clamp(zoom, 0.7f, 2.0f);
+    if (zoom == fontZoom_) return;
+    fontZoom_ = zoom;
+    fontZoomChanged_ = true;
+}
+
 void MainWindow::runSearch() {
     if (!index_) return;
     auto t0 = std::chrono::steady_clock::now();
-    results_ = search(*index_, parseQuery(queryBuf_));
+    results_ = search(*index_, parseQuery(queryBuf_, searchOptions_), 0, &paths_);
     searchMs_ = msSince(t0);
     selectedRow_ = -1;
 }
@@ -115,11 +140,19 @@ void MainWindow::copySelectedPath() {
     setStatus("Copied full path");
 }
 
+void MainWindow::copySelectedName() {
+    if (selectedRow_ < 0) return;
+    ImGui::SetClipboardText(std::string(index_->name(results_[selectedRow_])).c_str());
+    setStatus("Copied name");
+}
+
 void MainWindow::draw() {
     {
         std::lock_guard lock(pendingMutex_);
         if (pending_) {
             index_ = std::move(pending_);
+            paths_.build(*index_);
+            scanning_ = false;
             scanSeconds_ = msSince(scanStart_) / 1000.0;
             runSearch();
         }
@@ -131,9 +164,10 @@ void MainWindow::draw() {
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::Begin("FindEverything", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_MenuBar);
 
-    if (index_) handleKeyboard();
+    drawMenuBar();
+    handleKeyboard();
 
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (focusSearch_) {
@@ -145,8 +179,83 @@ void MainWindow::draw() {
     }
 
     drawResultsTable();
-    drawStatusBar();
+    if (showStatusBar_) drawStatusBar();
+    drawHelpPopups();
     ImGui::End();
+}
+
+void MainWindow::drawMenuBar() {
+    if (!ImGui::BeginMenuBar()) return;
+    const bool hasSelection = index_ && selectedRow_ >= 0;
+
+    // Shortcut labels are only displayed here; the keys are handled in handleKeyboard().
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open", "Enter", false, hasSelection)) openSelected();
+        if (ImGui::MenuItem("Open Containing Folder", "Ctrl+Enter", false, hasSelection)) revealSelected();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Rescan", "F5", false, !scanning_)) startIndexing();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Quit", "Ctrl+Q")) quit_ = true;
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Copy Full Path", "Ctrl+Shift+C", false, hasSelection)) copySelectedPath();
+        if (ImGui::MenuItem("Copy Name", nullptr, false, hasSelection)) copySelectedName();
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("View")) {
+        columnsChanged_ |= ImGui::MenuItem("Path Column", nullptr, &columnVisible_[kPath]);
+        columnsChanged_ |= ImGui::MenuItem("Size Column", nullptr, &columnVisible_[kSize]);
+        columnsChanged_ |= ImGui::MenuItem("Date Modified Column", nullptr, &columnVisible_[kModified]);
+        ImGui::MenuItem("Status Bar", nullptr, &showStatusBar_);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Zoom In", "Ctrl+=")) setZoom(fontZoom_ + 0.1f);
+        if (ImGui::MenuItem("Zoom Out", "Ctrl+-")) setZoom(fontZoom_ - 0.1f);
+        if (ImGui::MenuItem("Reset Zoom", "Ctrl+0")) setZoom(1.0f);
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Search")) {
+        bool changed = false;
+        changed |= ImGui::MenuItem("Match Case", "Ctrl+I", &searchOptions_.matchCase);
+        changed |= ImGui::MenuItem("Match Whole Word", "Ctrl+B", &searchOptions_.wholeWord);
+        changed |= ImGui::MenuItem("Match Path", "Ctrl+U", &searchOptions_.matchPath);
+        ImGui::Separator();
+        using Kind = SearchOptions::Kind;
+        static const std::pair<Kind, const char*> kKinds[] = {
+            {Kind::All, "Everything"}, {Kind::Files, "Files Only"}, {Kind::Folders, "Folders Only"}};
+        for (const auto& [kind, label] : kKinds) {
+            if (ImGui::MenuItem(label, nullptr, searchOptions_.kind == kind)) {
+                searchOptions_.kind = kind;
+                changed = true;
+            }
+        }
+        if (changed) runSearch();
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Search Syntax", "F1")) openSyntaxHelp_ = true;
+        if (ImGui::MenuItem("About FindEverything")) openAbout_ = true;
+        ImGui::EndMenu();
+    }
+
+    // Right-aligned hint showing which search options are active.
+    std::string active;
+    if (searchOptions_.matchCase) active += "Case  ";
+    if (searchOptions_.wholeWord) active += "Word  ";
+    if (searchOptions_.matchPath) active += "Path  ";
+    if (searchOptions_.kind == SearchOptions::Kind::Files) active += "Files  ";
+    if (searchOptions_.kind == SearchOptions::Kind::Folders) active += "Folders  ";
+    if (!active.empty()) {
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - ImGui::CalcTextSize(active.c_str()).x -
+                             ImGui::GetStyle().WindowPadding.x);
+        ImGui::TextColored(themeColors().dimText, "%s", active.c_str());
+    }
+
+    ImGui::EndMenuBar();
 }
 
 void MainWindow::handleKeyboard() {
@@ -154,8 +263,29 @@ void MainWindow::handleKeyboard() {
 
     const bool ctrl = ImGui::GetIO().KeyCtrl;
     const bool shift = ImGui::GetIO().KeyShift;
-    const int count = static_cast<int>(results_.size());
+    auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
 
+    if (ctrl && pressed(ImGuiKey_Q)) quit_ = true;
+    if (pressed(ImGuiKey_F1)) openSyntaxHelp_ = true;
+    if (pressed(ImGuiKey_F5)) startIndexing();
+    if ((ctrl && pressed(ImGuiKey_F)) || pressed(ImGuiKey_Escape)) focusSearch_ = true;
+
+    if (ctrl && (pressed(ImGuiKey_Equal) || pressed(ImGuiKey_KeypadAdd))) setZoom(fontZoom_ + 0.1f);
+    if (ctrl && (pressed(ImGuiKey_Minus) || pressed(ImGuiKey_KeypadSubtract))) setZoom(fontZoom_ - 0.1f);
+    if (ctrl && (pressed(ImGuiKey_0) || pressed(ImGuiKey_Keypad0))) setZoom(1.0f);
+
+    bool optionChanged = false;
+    auto toggle = [&](bool& option) {
+        option = !option;
+        optionChanged = true;
+    };
+    if (ctrl && pressed(ImGuiKey_I)) toggle(searchOptions_.matchCase);
+    if (ctrl && pressed(ImGuiKey_B)) toggle(searchOptions_.wholeWord);
+    if (ctrl && pressed(ImGuiKey_U)) toggle(searchOptions_.matchPath);
+    if (optionChanged) runSearch();
+
+    if (!index_) return;
+    const int count = static_cast<int>(results_.size());
     auto moveSelection = [&](int delta) {
         if (count == 0) return;
         selectedRow_ = std::clamp(selectedRow_ < 0 ? 0 : selectedRow_ + delta, 0, count - 1);
@@ -166,27 +296,33 @@ void MainWindow::handleKeyboard() {
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) moveSelection(20);
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) moveSelection(-20);
 
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+    if (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter)) {
         if (ctrl) revealSelected();  // Ctrl+Enter: open containing folder (as in Everything)
         else openSelected();
     }
-    if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_C, false)) copySelectedPath();
-    if ((ctrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-        focusSearch_ = true;
-    }
+    if (ctrl && shift && pressed(ImGuiKey_C)) copySelectedPath();
 }
 
 void MainWindow::drawResultsTable() {
-    const float statusBarHeight = ImGui::GetFrameHeightWithSpacing();
+    const float statusBarHeight = showStatusBar_ ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
     const ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter |
-                                  ImGuiTableFlags_BordersV | ImGuiTableFlags_Resizable;
-    if (!ImGui::BeginTable("results", 4, flags, ImVec2(0, -statusBarHeight))) return;
+                                  ImGuiTableFlags_BordersV | ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable;
+    if (!ImGui::BeginTable("results", kColumnCount, flags, ImVec2(0, -statusBarHeight))) return;
 
     ImGui::TableSetupScrollFreeze(0, 1);  // keep header row visible
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide, 2.0f);
     ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 3.0f);
     ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
     ImGui::TableSetupColumn("Date Modified", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9);
+
+    // Columns can be hidden from the View menu *or* by right-clicking the header,
+    // so sync both ways: menu change -> table, otherwise table -> menu checkmarks.
+    for (int c = kPath; c < kColumnCount; ++c) {
+        if (columnsChanged_) ImGui::TableSetColumnEnabled(c, columnVisible_[c]);
+        else columnVisible_[c] = ImGui::TableGetColumnFlags(c) & ImGuiTableColumnFlags_IsEnabled;
+    }
+    columnsChanged_ = false;
+
     ImGui::TableHeadersRow();
 
     if (index_) {
@@ -207,7 +343,7 @@ void MainWindow::drawResultsTable() {
                 const bool selected = row == selectedRow_;
 
                 ImGui::TableNextRow();
-                ImGui::TableNextColumn();
+                ImGui::TableSetColumnIndex(kName);
                 ImGui::PushID(row);
 
                 // An invisible full-row button handles clicks; we draw the content on top.
@@ -234,15 +370,15 @@ void MainWindow::drawResultsTable() {
                 std::string_view name = index_->name(id);
                 ImGui::TextUnformatted(name.data(), name.data() + name.size());
 
-                ImGui::TableNextColumn();
-                std::string parentPath = r.parent == kNoParent ? "" : index_->fullPath(r.parent);
-                ImGui::TextUnformatted(parentPath.c_str());
-
-                ImGui::TableNextColumn();
-                if (!isDir) ImGui::TextUnformatted(formatSize(r.size).c_str());
-
-                ImGui::TableNextColumn();
-                if (r.mtime) ImGui::TextUnformatted(formatTime(r.mtime).c_str());
+                // TableSetColumnIndex returns false for hidden columns: skip their work.
+                if (ImGui::TableSetColumnIndex(kPath)) {
+                    std::string_view dir = r.parent == kNoParent ? std::string_view() : paths_.dirPath(r.parent);
+                    ImGui::TextUnformatted(dir.data(), dir.data() + dir.size());
+                }
+                if (ImGui::TableSetColumnIndex(kSize) && !isDir) ImGui::TextUnformatted(formatSize(r.size).c_str());
+                if (ImGui::TableSetColumnIndex(kModified) && r.mtime) {
+                    ImGui::TextUnformatted(formatTime(r.mtime).c_str());
+                }
                 if (selected) ImGui::PopStyleColor();
 
                 ImGui::PopID();
@@ -258,24 +394,75 @@ void MainWindow::drawRowContextMenu(RecordId id) {
     if (ImGui::MenuItem(isDir ? "Open Parent Folder" : "Open Containing Folder", "Ctrl+Enter")) revealSelected();
     ImGui::Separator();
     if (ImGui::MenuItem("Copy Full Path", "Ctrl+Shift+C")) copySelectedPath();
-    if (ImGui::MenuItem("Copy Name")) {
-        ImGui::SetClipboardText(std::string(index_->name(id)).c_str());
-        setStatus("Copied name");
-    }
+    if (ImGui::MenuItem("Copy Name")) copySelectedName();
 }
 
 void MainWindow::drawStatusBar() {
     ImGui::PushStyleColor(ImGuiCol_Text, themeColors().dimText);
     const bool showMessage = !statusMessage_.empty() && msSince(statusTime_) < 3000;
+    const auto scanned = static_cast<unsigned long long>(progress_.entries.load());
     if (showMessage) {
         ImGui::TextUnformatted(statusMessage_.c_str());
     } else if (!index_) {
-        ImGui::Text("Indexing...  %llu objects", static_cast<unsigned long long>(progress_.entries.load()));
+        ImGui::Text("Indexing...  %llu objects", scanned);
+    } else if (scanning_) {
+        ImGui::Text("%zu objects   ·   %zu results   ·   rescanning... %llu", index_->size(), results_.size(), scanned);
     } else {
         ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   indexed in %.1f s", index_->size(),
                     results_.size(), searchMs_, scanSeconds_);
     }
     ImGui::PopStyleColor();
+}
+
+void MainWindow::drawHelpPopups() {
+    // Opened here, not inside the menu, because popup IDs are scoped to the
+    // window that opens them and the menu is its own window.
+    if (openSyntaxHelp_) ImGui::OpenPopup("Search Syntax");
+    if (openAbout_) ImGui::OpenPopup("About FindEverything");
+    openSyntaxHelp_ = openAbout_ = false;
+
+    const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Search Syntax", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static const char* kRows[][2] = {
+            {"foo bar", "name contains foo AND bar"},
+            {"\"foo bar\"", "exact phrase"},
+            {"!tmp", "name does NOT contain tmp"},
+            {"ext:jpg;png", "extension is jpg or png"},
+            {"file:  folder:", "only files / only folders"},
+            {"src/main", "a term with / matches the full path"},
+        };
+        if (ImGui::BeginTable("syntax", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+            for (const auto& row : kRows) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(row[0]);
+                ImGui::TableNextColumn();
+                ImGui::TextColored(themeColors().dimText, "%s", row[1]);
+            }
+            ImGui::EndTable();
+        }
+        ImGui::Spacing();
+        ImGui::TextColored(themeColors().dimText, "Search menu: Match Case (Ctrl+I), Whole Word (Ctrl+B), Path (Ctrl+U)");
+        ImGui::Spacing();
+        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("About FindEverything", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("FindEverything %s", FE_VERSION);
+        ImGui::TextColored(themeColors().dimText, "Instant file search, inspired by Everything by voidtools.");
+        ImGui::TextColored(themeColors().dimText, "Built with Dear ImGui %s and GLFW.", IMGUI_VERSION);
+        ImGui::Spacing();
+        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 }  // namespace fe

@@ -1,35 +1,83 @@
 #include "core/Search.h"
 
 #include <algorithm>
+#include <cctype>
 #include <thread>
 
 namespace fe {
 
-bool matches(const Index& index, RecordId id, const Query& q) {
-    const FileRecord& r = index.record(id);
-    const bool isDir = r.flags & kIsDir;
-    if (q.filesOnly && isDir) return false;
-    if (q.foldersOnly && !isDir) return false;
+namespace {
 
-    std::string_view name = index.lowerName(id);
-    for (const std::string& term : q.include) {
-        if (name.find(term) == std::string_view::npos) return false;
-    }
-    for (const std::string& term : q.exclude) {
-        if (name.find(term) != std::string_view::npos) return false;
-    }
-
-    if (!q.extensions.empty()) {
-        if (isDir) return false;
-        size_t dot = name.rfind('.');
-        if (dot == std::string_view::npos) return false;
-        std::string_view ext = name.substr(dot + 1);
-        if (std::find(q.extensions.begin(), q.extensions.end(), ext) == q.extensions.end()) return false;
-    }
-    return true;
+// Bytes >= 0x80 belong to multi-byte UTF-8 characters, i.e. letters in other scripts.
+bool isWordChar(char c) {
+    const auto u = static_cast<unsigned char>(c);
+    return std::isalnum(u) || u >= 0x80;
 }
 
-std::vector<RecordId> search(const Index& index, const Query& query, unsigned threads) {
+bool contains(std::string_view haystack, std::string_view term, bool wholeWord) {
+    if (!wholeWord) return haystack.find(term) != std::string_view::npos;
+    for (size_t pos = haystack.find(term); pos != std::string_view::npos; pos = haystack.find(term, pos + 1)) {
+        const size_t end = pos + term.size();
+        const bool startOk = pos == 0 || !isWordChar(haystack[pos - 1]);
+        const bool endOk = end == haystack.size() || !isWordChar(haystack[end]);
+        if (startOk && endOk) return true;
+    }
+    return false;
+}
+
+// One per thread: owns the scratch buffer used to assemble full paths.
+class Matcher {
+public:
+    Matcher(const Index& index, const Query& query, const PathCache* paths)
+        : index_(index), q_(query), paths_(query.matchPath ? paths : nullptr) {}
+
+    bool operator()(RecordId id) {
+        const FileRecord& r = index_.record(id);
+        const bool isDir = r.flags & kIsDir;
+        if (q_.filesOnly && isDir) return false;
+        if (q_.foldersOnly && !isDir) return false;
+
+        std::string_view text = haystack(id);
+        for (const std::string& term : q_.include) {
+            if (!contains(text, term, q_.wholeWord)) return false;
+        }
+        for (const std::string& term : q_.exclude) {
+            if (contains(text, term, q_.wholeWord)) return false;
+        }
+
+        if (!q_.extensions.empty()) {
+            if (isDir) return false;
+            std::string_view name = index_.lowerName(id);
+            size_t dot = name.rfind('.');
+            if (dot == std::string_view::npos) return false;
+            std::string_view ext = name.substr(dot + 1);
+            if (std::find(q_.extensions.begin(), q_.extensions.end(), ext) == q_.extensions.end()) return false;
+        }
+        return true;
+    }
+
+private:
+    std::string_view haystack(RecordId id) {
+        std::string_view name = q_.matchCase ? index_.name(id) : index_.lowerName(id);
+        if (!paths_) return name;
+        const RecordId parent = index_.record(id).parent;
+        if (parent == kNoParent) return name;
+
+        scratch_.assign(q_.matchCase ? paths_->dirPath(parent) : paths_->lowerDirPath(parent));
+        if (!scratch_.empty() && scratch_.back() != '/' && scratch_.back() != '\\') scratch_ += kPathSeparator;
+        scratch_.append(name);
+        return scratch_;
+    }
+
+    const Index& index_;
+    const Query& q_;
+    const PathCache* paths_;
+    std::string scratch_;
+};
+
+}  // namespace
+
+std::vector<RecordId> search(const Index& index, const Query& query, unsigned threads, const PathCache* paths) {
     const size_t n = index.size();
     if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
     if (n < 100'000) threads = 1;  // spawning threads costs more than scanning a small index
@@ -37,10 +85,11 @@ std::vector<RecordId> search(const Index& index, const Query& query, unsigned th
     // Each thread scans its own contiguous slice into its own vector: no locks needed.
     std::vector<std::vector<RecordId>> partial(threads);
     auto work = [&](unsigned t) {
+        Matcher matches(index, query, paths);
         const size_t begin = n * t / threads;
         const size_t end = n * (t + 1) / threads;
         for (size_t i = begin; i < end; ++i) {
-            if (matches(index, static_cast<RecordId>(i), query)) partial[t].push_back(static_cast<RecordId>(i));
+            if (matches(static_cast<RecordId>(i))) partial[t].push_back(static_cast<RecordId>(i));
         }
     };
 

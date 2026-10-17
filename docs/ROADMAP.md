@@ -17,6 +17,9 @@ Each milestone ends with something you can run.
 - [x] Right-click → Open, Open containing folder (FileManager1 D-Bus), Copy path / name
 - [x] Keyboard: ↑↓ PgUp PgDn, Enter, Ctrl+Enter, Ctrl+Shift+C, Ctrl+F / Esc
 - [x] System font (gsettings + fontconfig), dark/light + accent colour (XDG portal)
+- [x] Menu bar: File / Edit / View / Search / Help, rescan (F5), zoom, column toggles
+- [x] Match case, whole word, match path (folder path cache), files/folders only
+- [ ] Multi-select (Ctrl/Shift+click) + Select All
 - [ ] Click a column header to sort (`ImGuiTableFlags_Sortable`)
 - [ ] Remember window size and column widths
 - [ ] Follow theme changes live (portal `SettingChanged` signal)

@@ -10,9 +10,13 @@
 namespace fe {
 
 struct ScanOptions {
-    std::vector<std::string> roots;     // where to start, e.g. {"/"}
-    std::vector<std::string> excludes;  // absolute directory paths to skip entirely
+    std::vector<std::string> roots;     // where to start, e.g. {"/", "/home"}
+    std::vector<std::string> excludes;  // absolute directory paths to leave out entirely
     bool collectMetadata = true;        // size + mtime; costs one stat() per entry
+    // Don't descend into other filesystems mounted below a root (each disk is
+    // its own root instead). Mount points that are themselves roots are skipped
+    // so they don't appear twice.
+    bool stayOnFilesystem = false;
 };
 
 // Shared between the scanning thread and the UI thread, hence atomics.

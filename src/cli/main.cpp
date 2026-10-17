@@ -5,6 +5,7 @@
 //   fe-cli --rescan                  rescan "/" and refresh the cache
 //   fe-cli --root ~ ext:pdf invoice  scan just ~ (never cached)
 
+#include "app/Settings.h"
 #include "core/IndexFile.h"
 #include "core/PathCache.h"
 #include "core/Query.h"
@@ -56,12 +57,19 @@ int main(int argc, char** argv) {
             queryText += arg;
         }
     }
-    // Only whole-system scans share the cache with the GUI.
+    // Whole-system searches use the GUI's settings (disks, excluded folders)
+    // and share its cache. --root scans exactly what you ask for, uncached.
     const bool useCache = opts.roots.empty();
-    if (useCache) opts.roots = fe::defaultRoots();
-    opts.excludes = fe::defaultExcludes();
     std::string source;
-    for (const std::string& r : opts.roots) source += r + '\n';
+    if (useCache) {
+        const fe::Settings settings = fe::loadSettings();
+        const bool collectMetadata = opts.collectMetadata;
+        opts = fe::scanOptionsFor(settings);
+        opts.collectMetadata = collectMetadata;
+        source = fe::scanSourceFor(opts, settings);
+    } else {
+        opts.excludes = fe::defaultExcludes();
+    }
     const std::string cachePath = useCache ? fe::indexCachePath() : "";
 
     fe::Index index;

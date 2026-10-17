@@ -3,6 +3,7 @@
 #include "app/Theme.h"
 #include "core/IndexFile.h"
 #include "core/Search.h"
+#include "platform/Autostart.h"
 #include "platform/Paths.h"
 #include "platform/Shell.h"
 
@@ -63,11 +64,6 @@ std::string formatAge(int64_t unixSeconds) {
     return buf;
 }
 
-std::string joinLines(const std::vector<std::string>& items) {
-    std::string out;
-    for (const std::string& s : items) out += s + '\n';
-    return out;
-}
 
 // Tiny vector icons drawn with ImGui's draw list, so we need no icon font.
 void drawIcon(ImVec2 pos, float lineHeight, bool isDir, ImU32 color) {
@@ -89,18 +85,48 @@ void drawIcon(ImVec2 pos, float lineHeight, bool isDir, ImU32 color) {
 
 }  // namespace
 
+MainWindow::MainWindow(const SystemAppearance& system, float displayScale)
+    : systemAppearance_(system), displayScale_(displayScale), settings_(loadSettings()) {
+    applyTheme(appearance(), displayScale_);
+}
+
+SystemAppearance MainWindow::appearance() const {
+    SystemAppearance a = systemAppearance_;
+    if (settings_.theme == Settings::Theme::Dark) a.dark = true;
+    if (settings_.theme == Settings::Theme::Light) a.dark = false;
+    if (settings_.customAccent) {
+        a.hasAccent = true;
+        std::copy(std::begin(settings_.accent), std::end(settings_.accent), a.accent);
+    }
+    return a;
+}
+
 MainWindow::~MainWindow() {
     progress_.cancel = true;
     if (scanThread_.joinable()) scanThread_.join();
 }
 
-void MainWindow::start() {
-    cachePath_ = indexCachePath();
-    scanSource_ = joinLines(defaultRoots());
-    startIndexing(/*loadCacheFirst=*/true);
+void MainWindow::configureScan() {
+    scanOptions_ = scanOptionsFor(settings_);
+    scanSource_ = scanSourceFor(scanOptions_, settings_);
 }
 
-void MainWindow::startIndexing(bool loadCacheFirst) {
+void MainWindow::start() {
+    cachePath_ = indexCachePath();
+    configureScan();
+    startIndexing(/*loadCacheFirst=*/true, /*scan=*/settings_.rescanOnStartup);
+}
+
+void MainWindow::restartIndexing() {
+    if (scanThread_.joinable()) {
+        progress_.cancel = true;  // the scanner checks this between directories
+        scanThread_.join();
+    }
+    scanning_ = false;
+    startIndexing();
+}
+
+void MainWindow::startIndexing(bool loadCacheFirst, bool scan) {
     if (scanning_) return;
     if (scanThread_.joinable()) scanThread_.join();  // previous scan, already finished
 
@@ -111,14 +137,16 @@ void MainWindow::startIndexing(bool loadCacheFirst) {
     scanStart_ = std::chrono::steady_clock::now();
 
     // The old index stays searchable while the new one is built.
-    scanThread_ = std::thread([this, loadCacheFirst, cachePath = cachePath_, source = scanSource_] {
+    scanThread_ = std::thread([this, loadCacheFirst, scan, opts = scanOptions_, cachePath = cachePath_,
+                               source = scanSource_] {
         // Derive the path cache and sort orders here too, so the UI never stalls.
-        auto publish = [this](std::unique_ptr<Index> index, int64_t cachedAt) {
+        auto publish = [this](std::unique_ptr<Index> index, int64_t cachedAt, bool final) {
             auto snapshot = std::make_unique<IndexSnapshot>();
             snapshot->index = std::move(index);
             snapshot->paths.build(*snapshot->index);
             snapshot->sorts.build(*snapshot->index, snapshot->paths);
             snapshot->cachedAt = cachedAt;
+            snapshot->final = final;
             std::lock_guard lock(pendingMutex_);
             pending_ = std::move(snapshot);
         };
@@ -129,19 +157,17 @@ void MainWindow::startIndexing(bool loadCacheFirst) {
             auto cached = std::make_unique<Index>();
             IndexFileInfo info;
             if (loadIndex(*cached, cachePath, &info) && info.source == source) {
-                publish(std::move(cached), info.createdAt);
+                publish(std::move(cached), info.createdAt, /*final=*/!scan);
+                if (!scan) return;
             }
         }
 
         auto index = std::make_unique<Index>();
-        ScanOptions opts;
-        opts.roots = defaultRoots();
-        opts.excludes = defaultExcludes();
-        if (!scanFilesystem(*index, opts, &progress_)) return;  // cancelled: app is closing
+        if (!scanFilesystem(*index, opts, &progress_)) return;  // cancelled
 
         // Saved from this thread so the UI never waits for the disk.
         if (!cachePath.empty()) saveIndex(*index, cachePath, source);
-        publish(std::move(index), 0);
+        publish(std::move(index), 0, /*final=*/true);
     });
 }
 
@@ -164,17 +190,39 @@ void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
     }
 }
 
-bool MainWindow::consumeFontZoomChange() {
-    const bool changed = fontZoomChanged_;
-    fontZoomChanged_ = false;
-    return changed;
+bool MainWindow::consumeFontRebuild() {
+    const bool dirty = fontsDirty_;
+    fontsDirty_ = false;
+    return dirty;
 }
 
 void MainWindow::setZoom(float zoom) {
     zoom = std::clamp(zoom, 0.7f, 2.0f);
-    if (zoom == fontZoom_) return;
-    fontZoom_ = zoom;
-    fontZoomChanged_ = true;
+    if (zoom == settings_.fontZoom) return;
+    settings_.fontZoom = zoom;
+    fontsDirty_ = true;
+    saveSettings(settings_);
+}
+
+void MainWindow::applyPreferences(Settings next) {
+    if (next.launchAtLogin != settings_.launchAtLogin && !setLaunchAtLogin(next.launchAtLogin)) {
+        setStatus("Could not change the login startup entry");
+        next.launchAtLogin = settings_.launchAtLogin;
+    }
+    const bool rescan =
+        next.excludedVolumes != settings_.excludedVolumes || next.excludedFolders != settings_.excludedFolders;
+    const bool restyle = next.theme != settings_.theme || next.customAccent != settings_.customAccent ||
+                         !std::equal(std::begin(next.accent), std::end(next.accent), std::begin(settings_.accent));
+    const bool refont = restyle || next.fontZoom != settings_.fontZoom;
+
+    settings_ = std::move(next);
+    if (!saveSettings(settings_)) setStatus("Could not save settings to " + settingsFilePath());
+    if (restyle) applyTheme(appearance(), displayScale_);
+    if (refont) fontsDirty_ = true;
+    if (rescan) {
+        configureScan();
+        restartIndexing();
+    }
 }
 
 void MainWindow::runSearch() {
@@ -230,12 +278,11 @@ void MainWindow::draw() {
         std::lock_guard lock(pendingMutex_);
         if (pending_) {
             const bool fresh = pending_->cachedAt == 0;
+            const bool final = pending_->final;
             cachedIndexTime_ = pending_->cachedAt;
             adoptIndex(std::move(pending_));
-            if (fresh) {
-                scanning_ = false;
-                scanSeconds_ = msSince(scanStart_) / 1000.0;
-            }
+            if (final) scanning_ = false;
+            if (fresh) scanSeconds_ = msSince(scanStart_) / 1000.0;
         }
     }
 
@@ -262,6 +309,7 @@ void MainWindow::draw() {
     drawResultsTable();
     if (showStatusBar_) drawStatusBar();
     drawHelpPopups();
+    if (preferences_.draw() == PreferencesDialog::Result::Ok) applyPreferences(preferences_.edited());
     ImGui::End();
 }
 
@@ -283,6 +331,8 @@ void MainWindow::drawMenuBar() {
     if (ImGui::BeginMenu("Edit")) {
         if (ImGui::MenuItem("Copy Full Path", "Ctrl+Shift+C", false, hasSelection)) copySelectedPath();
         if (ImGui::MenuItem("Copy Name", nullptr, false, hasSelection)) copySelectedName();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Preferences...", "Ctrl+,")) preferences_.open(settings_);
         ImGui::EndMenu();
     }
 
@@ -292,8 +342,8 @@ void MainWindow::drawMenuBar() {
         columnsChanged_ |= ImGui::MenuItem("Date Modified Column", nullptr, &columnVisible_[kModified]);
         ImGui::MenuItem("Status Bar", nullptr, &showStatusBar_);
         ImGui::Separator();
-        if (ImGui::MenuItem("Zoom In", "Ctrl+=")) setZoom(fontZoom_ + 0.1f);
-        if (ImGui::MenuItem("Zoom Out", "Ctrl+-")) setZoom(fontZoom_ - 0.1f);
+        if (ImGui::MenuItem("Zoom In", "Ctrl+=")) setZoom(settings_.fontZoom + 0.1f);
+        if (ImGui::MenuItem("Zoom Out", "Ctrl+-")) setZoom(settings_.fontZoom - 0.1f);
         if (ImGui::MenuItem("Reset Zoom", "Ctrl+0")) setZoom(1.0f);
         ImGui::EndMenu();
     }
@@ -342,6 +392,7 @@ void MainWindow::drawMenuBar() {
 void MainWindow::handleKeyboard() {
     if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) return;
 
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Comma, false)) preferences_.open(settings_);
     const bool ctrl = ImGui::GetIO().KeyCtrl;
     const bool shift = ImGui::GetIO().KeyShift;
     auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
@@ -351,8 +402,8 @@ void MainWindow::handleKeyboard() {
     if (pressed(ImGuiKey_F5)) startIndexing();
     if ((ctrl && pressed(ImGuiKey_F)) || pressed(ImGuiKey_Escape)) focusSearch_ = true;
 
-    if (ctrl && (pressed(ImGuiKey_Equal) || pressed(ImGuiKey_KeypadAdd))) setZoom(fontZoom_ + 0.1f);
-    if (ctrl && (pressed(ImGuiKey_Minus) || pressed(ImGuiKey_KeypadSubtract))) setZoom(fontZoom_ - 0.1f);
+    if (ctrl && (pressed(ImGuiKey_Equal) || pressed(ImGuiKey_KeypadAdd))) setZoom(settings_.fontZoom + 0.1f);
+    if (ctrl && (pressed(ImGuiKey_Minus) || pressed(ImGuiKey_KeypadSubtract))) setZoom(settings_.fontZoom - 0.1f);
     if (ctrl && (pressed(ImGuiKey_0) || pressed(ImGuiKey_Keypad0))) setZoom(1.0f);
 
     bool optionChanged = false;
@@ -508,6 +559,9 @@ void MainWindow::drawStatusBar() {
         std::string age = cachedIndexTime_ ? "index from " + formatAge(cachedIndexTime_) + ", updating" : "rescanning";
         ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", index_->size(), results_.size(), age.c_str(),
                     scanned);
+    } else if (cachedIndexTime_) {
+        ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   index from %s (F5 to rescan)",
+                    index_->size(), results_.size(), searchMs_, formatAge(cachedIndexTime_).c_str());
     } else {
         ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   indexed in %.1f s", index_->size(),
                     results_.size(), searchMs_, scanSeconds_);

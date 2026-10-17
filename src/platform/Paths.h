@@ -11,6 +11,16 @@ namespace fe {
 // Empty string if it cannot be determined or created.
 std::string cacheDirectory();
 
-std::string indexCachePath();  // cacheDirectory() + "/index.bin"
+// Per-user folder for settings, created if needed:
+//   Linux    $XDG_CONFIG_HOME/findeverything  (default ~/.config/findeverything)
+//   Windows  %APPDATA%\FindEverything
+//   macOS    ~/Library/Application Support/FindEverything
+std::string configDirectory();
+
+std::string indexCachePath();     // cacheDirectory() + "/index.bin"
+std::string settingsFilePath();   // configDirectory() + "/settings.ini"
+
+// Absolute path of the running executable ("" if unknown).
+std::string executablePath();
 
 }  // namespace fe

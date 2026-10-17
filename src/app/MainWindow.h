@@ -1,9 +1,12 @@
 #pragma once
 
+#include "app/PreferencesDialog.h"
+#include "app/Settings.h"
 #include "core/Index.h"
 #include "core/PathCache.h"
 #include "core/Query.h"
 #include "core/Sort.h"
+#include "platform/Appearance.h"
 #include "platform/Scanner.h"
 
 #include <chrono>
@@ -22,6 +25,7 @@ struct IndexSnapshot {
     PathCache paths;
     SortOrders sorts;
     int64_t cachedAt = 0;  // >0: loaded from the cache file (unix time); 0: fresh scan
+    bool final = false;    // no further snapshot follows (scan finished, or no scan)
 };
 
 // The whole UI: menu bar, search box, results table, status bar.
@@ -29,22 +33,29 @@ struct IndexSnapshot {
 // UI thread through pending_ (guarded by pendingMutex_).
 class MainWindow {
 public:
-    MainWindow() = default;
+    // `system` = what the desktop asked for; `displayScale` = monitor content scale.
+    MainWindow(const SystemAppearance& system, float displayScale);
     ~MainWindow();
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;
 
     // Loads the cached index (instant results), then rescans in the background.
     void start();
-    void startIndexing(bool loadCacheFirst = false);
+    void startIndexing(bool loadCacheFirst = false, bool scan = true);
     void draw();  // call once per frame between ImGui::NewFrame() and ImGui::Render()
 
     // Requests the main loop acts on (they involve GLFW / the font texture).
     bool quitRequested() const { return quit_; }
-    float fontZoom() const { return fontZoom_; }
-    bool consumeFontZoomChange();
+    bool consumeFontRebuild();  // true once after zoom/theme changes needing new fonts
+
+    // The look after applying user settings on top of the system appearance.
+    SystemAppearance appearance() const;
+    float fontScale() const { return displayScale_ * settings_.fontZoom; }
 
 private:
+    void configureScan();
+    void restartIndexing();
+    void applyPreferences(Settings next);
     void adoptIndex(std::unique_ptr<IndexSnapshot> snapshot);
     void runSearch();
     void applySort();
@@ -74,7 +85,8 @@ private:
     std::chrono::steady_clock::time_point scanStart_;
     double scanSeconds_ = 0;
     std::string cachePath_;        // ~/.cache/findeverything/index.bin ("" = no caching)
-    std::string scanSource_;       // roots, stored in the cache to detect config changes
+    ScanOptions scanOptions_;      // from settings: which disks, which exclusions
+    std::string scanSource_;       // describes scanOptions_; stored in the cache to detect changes
     int64_t cachedIndexTime_ = 0;  // unix time of the loaded cache, 0 = fresh scan
 
     // --- search
@@ -94,8 +106,13 @@ private:
     bool columnVisible_[kColumnCount] = {true, true, true, true};
     bool columnsChanged_ = false;  // menu changed visibility; push it into the table
     bool showStatusBar_ = true;
-    float fontZoom_ = 1.0f;
-    bool fontZoomChanged_ = false;
+    bool fontsDirty_ = false;
+
+    // --- settings
+    SystemAppearance systemAppearance_;
+    float displayScale_ = 1.0f;
+    Settings settings_;
+    PreferencesDialog preferences_;
 
     bool openSyntaxHelp_ = false;
     bool openAbout_ = false;

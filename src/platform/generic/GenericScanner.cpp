@@ -62,6 +62,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
 
             const bool isLink = entry.is_symlink(ec);
             const bool isDir = !isLink && entry.is_directory(ec);
+            if (isDir && isExcluded(entry.path())) continue;  // left out entirely
             uint8_t flags = (isDir ? kIsDir : 0) | (isLink ? kIsSymlink : 0);
 
             uint64_t size = 0;
@@ -75,7 +76,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
             RecordId id = index.add(dirId, toUtf8(entry.path().filename()), flags, size, mtime);
             if (progress) progress->entries.fetch_add(1, std::memory_order_relaxed);
 
-            if (isDir && !isExcluded(entry.path())) stack.emplace_back(entry.path(), id);
+            if (isDir) stack.emplace_back(entry.path(), id);
         }
     }
     return true;

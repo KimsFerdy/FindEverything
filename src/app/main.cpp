@@ -12,8 +12,12 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cstring>
 
-int main() {
+int main(int argc, char** argv) {
+    bool startMinimized = false;  // passed by the login autostart entry
+    for (int i = 1; i < argc; ++i) startMinimized |= std::strcmp(argv[i], "--minimized") == 0;
+
     glfwSetErrorCallback([](int code, const char* msg) { std::fprintf(stderr, "GLFW error %d: %s\n", code, msg); });
     if (!glfwInit()) return 1;
 
@@ -34,6 +38,7 @@ int main() {
         glfwTerminate();
         return 1;
     }
+    if (startMinimized) glfwIconifyWindow(window);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);  // vsync
 
@@ -45,16 +50,13 @@ int main() {
     // Content scale is >1 on HiDPI screens (from Xft.dpi on X11).
     float scaleX = 1.0f, scaleY = 1.0f;
     glfwGetWindowContentScale(window, &scaleX, &scaleY);
-    const fe::SystemAppearance appearance = fe::querySystemAppearance();
-    fe::applyTheme(appearance, scaleX);
-    fe::loadFonts(appearance, scaleX);
-    const ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
-
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init(glslVersion);
-
     {
-        fe::MainWindow app;
+        // The app loads settings and applies the theme (system look + user overrides).
+        fe::MainWindow app(fe::querySystemAppearance(), scaleX);
+        fe::loadFonts(app.appearance(), app.fontScale());
+
+        ImGui_ImplGlfw_InitForOpenGL(window, true);
+        ImGui_ImplOpenGL3_Init(glslVersion);
         app.start();
 
         while (!glfwWindowShouldClose(window)) {
@@ -65,9 +67,9 @@ int main() {
             // Font zoom: ImGui 1.91 bakes fonts into a texture at a fixed size, so
             // a new size means rebuilding the atlas and re-uploading it to the GPU.
             // Must happen between frames.
-            if (app.consumeFontZoomChange()) {
+            if (app.consumeFontRebuild()) {
                 ImGui::GetIO().Fonts->Clear();
-                fe::loadFonts(appearance, scaleX * app.fontZoom());
+                fe::loadFonts(app.appearance(), app.fontScale());
                 ImGui_ImplOpenGL3_DestroyFontsTexture();
                 ImGui_ImplOpenGL3_CreateFontsTexture();
             }
@@ -81,6 +83,7 @@ int main() {
             int w, h;
             glfwGetFramebufferSize(window, &w, &h);
             glViewport(0, 0, w, h);
+            const ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];  // theme can change at runtime
             glClearColor(bg.x, bg.y, bg.z, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

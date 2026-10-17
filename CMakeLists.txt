@@ -45,6 +45,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/LinuxShell.cpp
         src/platform/linux/LinuxAppearance.cpp
         src/platform/linux/Process.cpp
+        src/platform/linux/LinuxVolumes.cpp
+        src/platform/linux/LinuxAutostart.cpp
     )
 else()
     # Windows / macOS use the portable std::filesystem scanner until native
@@ -54,6 +56,8 @@ else()
         src/platform/generic/GenericWatcher.cpp
         src/platform/generic/GenericShell.cpp
         src/platform/generic/GenericAppearance.cpp
+        src/platform/generic/GenericVolumes.cpp
+        src/platform/generic/GenericAutostart.cpp
     )
 endif()
 add_library(fe_platform STATIC ${FE_PLATFORM_SOURCES} src/platform/Paths.cpp)
@@ -66,7 +70,7 @@ fe_warnings(fe_platform)
 # ---------------------------------------------------------------------------
 # fe-cli: terminal front-end, handy for testing and benchmarking.
 # ---------------------------------------------------------------------------
-add_executable(fe-cli src/cli/main.cpp)
+add_executable(fe-cli src/cli/main.cpp src/app/Settings.cpp)
 target_link_libraries(fe-cli PRIVATE fe_platform)
 fe_warnings(fe-cli)
 
@@ -79,6 +83,8 @@ if(FE_BUILD_GUI)
         src/app/main.cpp
         src/app/MainWindow.cpp
         src/app/Theme.cpp
+        src/app/Settings.cpp
+        src/app/PreferencesDialog.cpp
     )
     target_link_libraries(FindEverything PRIVATE fe_platform imgui)
     target_compile_definitions(FindEverything PRIVATE FE_VERSION="${PROJECT_VERSION}")

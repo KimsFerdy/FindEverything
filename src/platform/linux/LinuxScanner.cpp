@@ -24,6 +24,7 @@ namespace {
 struct PendingDir {
     std::string path;
     RecordId id;
+    dev_t device;  // which filesystem this directory lives on
 };
 
 bool isDotOrDotDot(const char* n) {
@@ -34,6 +35,7 @@ bool isDotOrDotDot(const char* n) {
 
 bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progress) {
     const std::unordered_set<std::string> excluded(opts.excludes.begin(), opts.excludes.end());
+    const std::unordered_set<std::string> rootSet(opts.roots.begin(), opts.roots.end());
 
     // Iterative depth-first walk with an explicit stack: deep trees can't overflow
     // the call stack the way recursion could.
@@ -42,7 +44,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
         struct stat st {};
         if (lstat(root.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
         RecordId id = index.add(kNoParent, root, kIsDir, 0, st.st_mtime);
-        stack.push_back({root, id});
+        stack.push_back({root, id, st.st_dev});
     }
 
     while (!stack.empty()) {
@@ -72,15 +74,31 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
             unsigned char type = e->d_type;
             uint64_t size = 0;
             int64_t mtime = 0;
-            if (opts.collectMetadata || type == DT_UNKNOWN) {
+            dev_t device = dir.device;
+            const bool needStat = opts.collectMetadata || type == DT_UNKNOWN || (opts.stayOnFilesystem && type == DT_DIR);
+            if (needStat) {
                 struct stat st {};
                 if (fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
                     size = static_cast<uint64_t>(st.st_size);
                     mtime = st.st_mtime;
+                    device = st.st_dev;
                     if (S_ISDIR(st.st_mode)) type = DT_DIR;
                     else if (S_ISLNK(st.st_mode)) type = DT_LNK;
                     else if (type == DT_UNKNOWN) type = DT_REG;
                 }
+            }
+
+            std::string child;
+            bool descend = false;
+            if (type == DT_DIR) {
+                child = dir.path;
+                if (child.back() != '/') child += '/';
+                child += name;
+                if (excluded.count(child)) continue;  // left out entirely
+                // st_dev changes at a mount point: we're about to enter another disk.
+                const bool otherFilesystem = device != dir.device;
+                if (otherFilesystem && rootSet.count(child)) continue;  // indexed as its own root
+                descend = !(opts.stayOnFilesystem && otherFilesystem);
             }
 
             uint8_t flags = 0;
@@ -90,12 +108,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
             RecordId id = index.add(dir.id, name, flags, (flags & kIsDir) ? 0 : size, mtime);
             if (progress) progress->entries.fetch_add(1, std::memory_order_relaxed);
 
-            if (type == DT_DIR) {
-                std::string child = dir.path;
-                if (child.back() != '/') child += '/';
-                child += name;
-                if (!excluded.count(child)) stack.push_back({std::move(child), id});
-            }
+            if (descend) stack.push_back({std::move(child), id, device});
         }
         closedir(d);  // also closes fd
     }

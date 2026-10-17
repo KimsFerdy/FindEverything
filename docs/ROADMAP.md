@@ -41,7 +41,12 @@ Each milestone ends with something you can run.
 - [x] fe-cli shares the cache (`--rescan` to refresh)
 - [ ] `mmap` the file instead of reading it (zero-copy, even faster start)
 - [ ] Apply only the differences instead of swapping the whole index
-- [ ] Settings file (`~/.config/findeverything/config.toml`): roots, excludes
+- [x] Settings file (`~/.config/findeverything/settings.ini`) + Edit → Preferences:
+      start at login (XDG autostart, `--minimized`), rescan on startup, disks to
+      index (one root per mount, `st_dev` boundary), excluded folders, theme,
+      accent, font size
+- [ ] System tray icon (so "start minimized" can hide to tray)
+- [ ] Notice newly plugged-in drives (watch /proc/self/mountinfo with poll())
 
 ## M5: Other platforms
 - [ ] Windows: NTFS MFT scanner + USN journal watcher

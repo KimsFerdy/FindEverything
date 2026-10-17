@@ -34,15 +34,19 @@ std::string parentDir(const std::string& path) {
 
 bool openPath(const std::string& path) { return posix::spawnDetached({"xdg-open", path}); }
 
-bool revealInFileManager(const std::string& path) {
+bool revealInFileManager(const std::string& path) { return revealInFileManager(std::vector<std::string>{path}); }
+
+bool revealInFileManager(const std::vector<std::string>& paths) {
+    if (paths.empty()) return false;
+    std::string uris;
+    for (const std::string& p : paths) uris += (uris.empty() ? "" : ",") + toFileUri(p);
     // org.freedesktop.FileManager1, nemo / nautilus / dolphin / thunar all do this.
     // commas are percent-encoded in the uri which matters since dbus-send splits arrays on ','
-    int rc =
-        posix::runCapture({"dbus-send", "--session", "--print-reply", "--reply-timeout=2000",
-                           "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
-                           "org.freedesktop.FileManager1.ShowItems", "array:string:" + toFileUri(path), "string:"});
+    int rc = posix::runCapture({"dbus-send", "--session", "--print-reply", "--reply-timeout=2000",
+                                "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+                                "org.freedesktop.FileManager1.ShowItems", "array:string:" + uris, "string:"});
     if (rc == 0) return true;
-    return posix::spawnDetached({"xdg-open", parentDir(path)});  // no FileManager1, just open the folder
+    return posix::spawnDetached({"xdg-open", parentDir(paths.front())});  // no FileManager1, just open the folder
 }
 
 }  // namespace fe

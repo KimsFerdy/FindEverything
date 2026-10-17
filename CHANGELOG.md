@@ -20,6 +20,12 @@
 - wildcards `*.cpp`, `regex:`, `size:>100mb`, `dm:today` / `dm:week` / `dm:2026-10-17` / ranges, `path:`
 - query errors (bad regex etc) show in the status bar instead of silently matching nothing
 
+### Selection + Trash
+- multi-select: click, ctrl+click, shift+click, shift+arrows, ctrl+a; survives sorting and live updates
+- open / show in file manager / copy paths or names for the whole selection
+- Move to Trash (Delete), always asks first. freedesktop trash spec, restorable from the file manager
+- arrow keys move focus to the results (like Everything), typing goes back to the search box
+
 ### Other
 - Help > Check for Updates (asks GitHub, only when you click it)
 - lower memory use after scans (~110 MB less)

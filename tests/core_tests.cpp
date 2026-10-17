@@ -206,11 +206,11 @@ static void testSyntax() {
     fe::Index idx;
     fe::RecordId root = idx.add(fe::kNoParent, "/", fe::kIsDir, 0, 0);
     fe::RecordId music = idx.add(root, "music", fe::kIsDir, 0, at(2026, 10, 17, 9));
-    idx.add(music, "song.mp3", 0, 5 << 20, at(2026, 10, 17, 9));           // 5 MB, today
-    idx.add(music, "cover.JPG", 0, 300 << 10, at(2026, 10, 16, 20));       // 300 KB, yesterday
-    idx.add(root, "main.cpp", 0, 2 << 10, at(2026, 9, 1, 10));             // 2 KB, last month
-    idx.add(root, "main.cpp.bak", 0, 2 << 10, at(2025, 1, 1, 10));         // last year
-    idx.add(root, "IMG_2041.png", 0, 1 << 30, at(2026, 10, 10, 10));       // 1 GB
+    idx.add(music, "song.mp3", 0, 5 << 20, at(2026, 10, 17, 9));            // 5 MB, today
+    idx.add(music, "cover.JPG", 0, 300 << 10, at(2026, 10, 16, 20));        // 300 KB, yesterday
+    idx.add(root, "main.cpp", 0, 2 << 10, at(2026, 9, 1, 10));              // 2 KB, last month
+    idx.add(root, "main.cpp.bak", 0, 2 << 10, at(2025, 1, 1, 10));          // last year
+    idx.add(root, "IMG_2041.png", 0, 1 << 30, at(2026, 10, 10, 10));        // 1 GB
     idx.add(root, "run-me", fe::kIsExecutable, 100, at(2026, 10, 17, 11));  // exec bit, no extension
     fe::PathCache paths;
     paths.build(idx);

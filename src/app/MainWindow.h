@@ -59,7 +59,7 @@ private:
     void startIndexService(bool scanNow);
     void applyPreferences(Settings next);
     void adoptIndex(std::unique_ptr<IndexSnapshot> snapshot);
-    void runSearch();
+    void runSearch(bool keepSelection = false);
     void applySort();
     void handleKeyboard();
     void drawMenuBar();
@@ -67,6 +67,20 @@ private:
     void drawRowContextMenu(RecordId id);
     void drawStatusBar();
     void drawHelpPopups();
+
+    // selection: a bitmap by record id (survives sorting + live updates), the cursor row for the keyboard,
+    // the anchor row for shift ranges. nothing marked but a cursor = the cursor row is the selection
+    bool isMarked(RecordId id) const { return id < marked_.size() * 64 && ((marked_[id >> 6] >> (id & 63)) & 1); }
+    void setMark(RecordId id, bool on);
+    void clearMarks();
+    void selectOnly(int row);
+    void selectRange(int from, int to);
+    void toggleRow(int row);
+    void selectAll();
+    std::vector<RecordId> selectedIds() const;  // in result order
+    void requestTrash();
+    void moveSelectionToTrash();
+    void openIds(const std::vector<RecordId>& ids);
 
     void openSelected();
     void revealSelected();
@@ -91,13 +105,19 @@ private:
     SearchOptions searchOptions_;
     bool focusSearch_ = true;
     bool queryReplaced_ = false;     // setQuery() from outside, the input needs to reload
+    bool cursorToEnd_ = false;       // ...and the cursor goes to the end instead of select-all
     std::vector<RecordId> results_;  // already sorted
     double searchMs_ = 0;
     std::string queryError_;  // bad regex / size / date in the query
     SortKey sortKey_ = SortKey::Name;
     bool sortDescending_ = false;
 
-    int selectedRow_ = -1;  // into results_
+    int selectedRow_ = -1;  // cursor, into results_
+    int anchorRow_ = -1;
+    std::vector<uint64_t> marked_;
+    size_t markedCount_ = 0;
+    std::vector<RecordId> pendingIds_;  // waiting for "are you sure" (trash / open many)
+    bool openTrashConfirm_ = false, openManyConfirm_ = false;
     bool scrollToSelected_ = false;
 
     enum Column { kName, kPath, kSize, kModified, kColumnCount };

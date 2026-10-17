@@ -82,7 +82,9 @@ Search menu: match case `Ctrl+I`, whole word `Ctrl+B`, match path `Ctrl+U`. `F1`
 | `↑` `↓` `PgUp` `PgDn`       | move through results     |
 | `Enter`                     | open                     |
 | `Ctrl+Enter`                | show in file manager     |
-| `Ctrl+Shift+C`              | copy full path           |
+| `Ctrl+Shift+C`              | copy full path(s)        |
+| `Ctrl`/`Shift`+click, `Shift+↑↓`, `Ctrl+A` | select several |
+| `Delete`                    | move to Trash (asks first) |
 | `F5`                        | rescan                   |
 | `Ctrl+,`                    | preferences              |
 | `Ctrl+=` `Ctrl+-` `Ctrl+0`  | zoom                     |

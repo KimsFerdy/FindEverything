@@ -19,6 +19,9 @@
 - [x] live updates with inotify: create / delete / rename / move incl. whole trees, tombstones + compaction
 - [x] snapshots built off-thread, saved every minute and on quit
 - [x] help > check for updates
+- [x] global shortcut (cinnamon / gnome custom keybinding) + single instance over d-bus
+- [x] filters, wildcards, regex:, size:, dm:, path:
+- [x] multi-select + bulk actions + move to trash (freedesktop trash spec)
 - [ ] incremental sort orders (today every live change rebuilds them, ~0.5 s of cpu on 500k files)
 - [ ] fanotify when running as root / with a helper (`FAN_MARK_FILESYSTEM`, no per-folder watches)
 - [ ] notice changes made while the app wasn't running without a full rescan (compare dir mtimes)
@@ -27,7 +30,6 @@
 - [ ] persist sort orders in the cache (skip the ~0.5 s rebuild on startup)
 - [ ] `mmap` the index file
 - [ ] natural sort ("file2" before "file10")
-- [ ] multi-select + select all
 - [ ] remember window size / column widths
 - [ ] follow theme changes live (portal `SettingChanged`)
 - [ ] non-latin file names: imgui 1.92 dynamic fonts + fallback fonts

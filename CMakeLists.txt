@@ -51,6 +51,7 @@ add_library(fe_platform STATIC
     src/platform/Scanner.cpp
     src/platform/Shell.cpp
     src/platform/Tray.cpp
+    src/platform/Trash.cpp
     src/platform/Volumes.cpp
 )
 target_link_libraries(fe_platform PUBLIC fe_core PkgConfig::SYSTEMD)

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <utility>
 
@@ -15,6 +16,7 @@
 #include "platform/GlobalShortcut.h"
 #include "platform/Paths.h"
 #include "platform/Shell.h"
+#include "platform/Trash.h"
 #include "stb_image.h"
 
 #ifndef FE_VERSION
@@ -189,6 +191,7 @@ void MainWindow::setQuery(const std::string& text) {
     queryBuf_[std::min(text.size(), sizeof queryBuf_ - 1)] = '\0';
     runSearch();  // no-op until the index is in, adoptIndex searches again anyway
     queryReplaced_ = true;
+    cursorToEnd_ = true;
 }
 
 void MainWindow::remote(const AppBus::Request& request) {
@@ -241,7 +244,15 @@ void MainWindow::tick() {
 }
 
 void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
-    // keep the same row selected across the swap, ids change between scans
+    // live updates keep record ids, so the selection just stays. anything else renumbers everything:
+    // keep the cursor row by path, drop the rest
+    if (snapshot->origin == IndexSnapshot::Origin::Live && index_) {
+        index_ = std::move(snapshot->index);
+        paths_ = std::move(snapshot->paths);
+        sorts_ = std::move(snapshot->sorts);
+        runSearch(/*keepSelection=*/true);
+        return;
+    }
     std::string selectedPath = (index_ && selectedRow_ >= 0) ? index_->fullPath(results_[selectedRow_]) : "";
 
     index_ = std::move(snapshot->index);
@@ -253,7 +264,7 @@ void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
     std::string_view selectedName = std::string_view(selectedPath).substr(selectedPath.find_last_of('/') + 1);
     for (size_t i = 0; i < results_.size(); ++i) {
         if (index_->name(results_[i]) == selectedName && index_->fullPath(results_[i]) == selectedPath) {
-            selectedRow_ = static_cast<int>(i);
+            selectOnly(static_cast<int>(i));
             break;
         }
     }
@@ -312,23 +323,130 @@ void MainWindow::applyPreferences(Settings next) {
         startIndexService(false);  // the old service saved on its way out, cache is current
 }
 
-void MainWindow::runSearch() {
+void MainWindow::runSearch(bool keepSelection) {
     if (!index_) return;
+    const RecordId cursorId = (keepSelection && selectedRow_ >= 0) ? results_[selectedRow_] : kNoParent;
+    const RecordId anchorId = (keepSelection && anchorRow_ >= 0) ? results_[anchorRow_] : kNoParent;
     auto t0 = std::chrono::steady_clock::now();
     const Query query = parseQuery(queryBuf_, searchOptions_);
     queryError_ = query.error;
     std::vector<RecordId> matches = search(*index_, query, 0, &paths_);
     results_ = sortResults(matches, index_->size(), sorts_, sortKey_, sortDescending_);
     searchMs_ = msSince(t0);
-    selectedRow_ = -1;
+    selectedRow_ = anchorRow_ = -1;
+    if (!keepSelection) {
+        clearMarks();
+        return;
+    }
+    // live updates land all the time, a shift-range in progress has to survive them
+    auto rowOf = [&](RecordId id) {
+        auto it = std::find(results_.begin(), results_.end(), id);
+        return it == results_.end() ? -1 : static_cast<int>(it - results_.begin());
+    };
+    if (cursorId != kNoParent) selectedRow_ = rowOf(cursorId);
+    if (anchorId != kNoParent) anchorRow_ = rowOf(anchorId);
+    // marks of records that got deleted just stop showing up, recount what's left
+    markedCount_ = 0;
+    for (RecordId id : results_) markedCount_ += isMarked(id);
+}
+
+void MainWindow::setMark(RecordId id, bool on) {
+    if (id >= marked_.size() * 64) marked_.resize(index_->size() / 64 + 1, 0);
+    const uint64_t bit = uint64_t{1} << (id & 63);
+    const bool was = marked_[id >> 6] & bit;
+    if (was == on) return;
+    marked_[id >> 6] ^= bit;
+    markedCount_ += on ? 1 : -1;
+}
+
+void MainWindow::clearMarks() {
+    std::fill(marked_.begin(), marked_.end(), 0);
+    markedCount_ = 0;
+}
+
+void MainWindow::selectOnly(int row) {
+    clearMarks();
+    selectedRow_ = anchorRow_ = row;
+    if (row >= 0) setMark(results_[row], true);
+}
+
+void MainWindow::selectRange(int from, int to) {
+    clearMarks();
+    for (int r = std::min(from, to); r <= std::max(from, to); ++r) setMark(results_[r], true);
+    selectedRow_ = to;
+}
+
+void MainWindow::toggleRow(int row) {
+    setMark(results_[row], !isMarked(results_[row]));
+    selectedRow_ = anchorRow_ = row;
+}
+
+void MainWindow::selectAll() {
+    if (results_.empty()) return;
+    clearMarks();
+    for (RecordId id : results_) setMark(id, true);
+    if (selectedRow_ < 0) selectedRow_ = anchorRow_ = 0;
+}
+
+std::vector<RecordId> MainWindow::selectedIds() const {
+    std::vector<RecordId> ids;
+    if (!index_) return ids;
+    if (markedCount_ == 0) {
+        if (selectedRow_ >= 0) ids.push_back(results_[selectedRow_]);
+        return ids;
+    }
+    ids.reserve(markedCount_);
+    for (RecordId id : results_) {
+        if (isMarked(id)) ids.push_back(id);
+    }
+    return ids;
+}
+
+void MainWindow::openIds(const std::vector<RecordId>& ids) {
+    size_t failed = 0;
+    for (RecordId id : ids) failed += !openPath(index_->fullPath(id));
+    if (failed) setStatus("Could not open " + std::to_string(failed) + " of " + std::to_string(ids.size()) + " items");
+}
+
+void MainWindow::requestTrash() {
+    pendingIds_.clear();
+    for (RecordId id : selectedIds()) {
+        if (index_->record(id).parent != kNoParent) pendingIds_.push_back(id);  // never a whole disk
+    }
+    if (!pendingIds_.empty()) openTrashConfirm_ = true;
+}
+
+void MainWindow::moveSelectionToTrash() {
+    size_t moved = 0;
+    std::string firstError;
+    for (RecordId id : pendingIds_) {
+        const std::string path = index_->fullPath(id);
+        std::string error;
+        if (moveToTrash(path, &error))
+            ++moved;
+        else if (firstError.empty())
+            firstError = path + ": " + error;
+    }
+    const size_t failed = pendingIds_.size() - moved;
+    pendingIds_.clear();
+    clearMarks();
+    std::string msg = "Moved " + std::to_string(moved) + (moved == 1 ? " item" : " items") + " to the Trash";
+    if (failed)
+        msg += ", " + std::to_string(failed) + " failed (" + firstError + ")";
+    else if (!settings_.liveUpdates)
+        msg += ". Press F5 to update the results";
+    setStatus(msg);
 }
 
 void MainWindow::applySort() {
     if (!index_) return;
-    const RecordId selectedId = selectedRow_ >= 0 ? results_[selectedRow_] : kNoParent;
+    // marks are by id so they survive, the cursor and anchor rows have to be found again
+    const RecordId cursorId = selectedRow_ >= 0 ? results_[selectedRow_] : kNoParent;
     results_ = sortResults(results_, index_->size(), sorts_, sortKey_, sortDescending_);
-    if (selectedId != kNoParent) {
-        selectedRow_ = static_cast<int>(std::find(results_.begin(), results_.end(), selectedId) - results_.begin());
+    selectedRow_ = anchorRow_ = -1;
+    if (cursorId != kNoParent) {
+        auto it = std::find(results_.begin(), results_.end(), cursorId);
+        if (it != results_.end()) selectedRow_ = anchorRow_ = static_cast<int>(it - results_.begin());
         scrollToSelected_ = true;
     }
 }
@@ -339,27 +457,40 @@ void MainWindow::setStatus(std::string message) {
 }
 
 void MainWindow::openSelected() {
-    if (selectedRow_ < 0) return;
-    std::string path = index_->fullPath(results_[selectedRow_]);
-    if (!openPath(path)) setStatus("Could not open " + path);
+    const std::vector<RecordId> ids = selectedIds();
+    if (ids.size() > 10) {  // a stray Enter on 500 selected files would be no fun
+        pendingIds_ = ids;
+        openManyConfirm_ = true;
+        return;
+    }
+    openIds(ids);
 }
 
 void MainWindow::revealSelected() {
-    if (selectedRow_ < 0) return;
-    std::string path = index_->fullPath(results_[selectedRow_]);
-    if (!revealInFileManager(path)) setStatus("Could not open folder for " + path);
+    std::vector<std::string> paths;
+    for (RecordId id : selectedIds()) {
+        if (paths.size() == 100) break;
+        paths.push_back(index_->fullPath(id));
+    }
+    if (!paths.empty() && !revealInFileManager(paths)) setStatus("Could not open the file manager");
 }
 
 void MainWindow::copySelectedPath() {
-    if (selectedRow_ < 0) return;
-    ImGui::SetClipboardText(index_->fullPath(results_[selectedRow_]).c_str());
-    setStatus("Copied full path");
+    const std::vector<RecordId> ids = selectedIds();
+    if (ids.empty()) return;
+    std::string text;
+    for (RecordId id : ids) text += (text.empty() ? "" : "\n") + index_->fullPath(id);
+    ImGui::SetClipboardText(text.c_str());
+    setStatus(ids.size() == 1 ? "Copied full path" : "Copied " + std::to_string(ids.size()) + " paths");
 }
 
 void MainWindow::copySelectedName() {
-    if (selectedRow_ < 0) return;
-    ImGui::SetClipboardText(std::string(index_->name(results_[selectedRow_])).c_str());
-    setStatus("Copied name");
+    const std::vector<RecordId> ids = selectedIds();
+    if (ids.empty()) return;
+    std::string text;
+    for (RecordId id : ids) text += (text.empty() ? "" : "\n") + std::string(index_->name(id));
+    ImGui::SetClipboardText(text.c_str());
+    setStatus(ids.size() == 1 ? "Copied name" : "Copied " + std::to_string(ids.size()) + " names");
 }
 
 void MainWindow::draw() {
@@ -399,8 +530,17 @@ void MainWindow::draw() {
         ImGui::SetKeyboardFocusHere();
         focusSearch_ = false;
     }
+    // focusing selects all by default, after setQuery() we want the cursor at the end instead
+    auto putCursorAtEnd = [](ImGuiInputTextCallbackData* data) {
+        auto* self = static_cast<MainWindow*>(data->UserData);
+        if (self->cursorToEnd_) {
+            data->CursorPos = data->SelectionStart = data->SelectionEnd = data->BufTextLen;
+            self->cursorToEnd_ = false;
+        }
+        return 0;
+    };
     if (ImGui::InputTextWithHint("##query", "Search  (e.g.  report ext:pdf  *.cpp  size:>10mb  dm:today)", queryBuf_,
-                                 sizeof queryBuf_)) {
+                                 sizeof queryBuf_, ImGuiInputTextFlags_CallbackAlways, putCursorAtEnd, this)) {
         runSearch();  // every keystroke, like Everything
     }
 
@@ -413,12 +553,14 @@ void MainWindow::draw() {
 
 void MainWindow::drawMenuBar() {
     if (!ImGui::BeginMenuBar()) return;
-    const bool hasSelection = index_ && selectedRow_ >= 0;
+    const bool hasSelection = index_ && (selectedRow_ >= 0 || markedCount_ > 0);
+    const bool many = markedCount_ > 1;
 
     // shortcut labels are just text here, the keys live in handleKeyboard()
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Open", "Enter", false, hasSelection)) openSelected();
         if (ImGui::MenuItem("Open Containing Folder", "Ctrl+Enter", false, hasSelection)) revealSelected();
+        if (ImGui::MenuItem("Move to Trash", "Delete", false, hasSelection)) requestTrash();
         ImGui::Separator();
         if (ImGui::MenuItem("Rescan", "F5", false, service_ && !service_->scanning())) rescan();
         ImGui::Separator();
@@ -427,8 +569,11 @@ void MainWindow::drawMenuBar() {
     }
 
     if (ImGui::BeginMenu("Edit")) {
-        if (ImGui::MenuItem("Copy Full Path", "Ctrl+Shift+C", false, hasSelection)) copySelectedPath();
-        if (ImGui::MenuItem("Copy Name", nullptr, false, hasSelection)) copySelectedName();
+        if (ImGui::MenuItem(many ? "Copy Full Paths" : "Copy Full Path", "Ctrl+Shift+C", false, hasSelection))
+            copySelectedPath();
+        if (ImGui::MenuItem(many ? "Copy Names" : "Copy Name", nullptr, false, hasSelection)) copySelectedName();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Select All", "Ctrl+A", false, index_ && !results_.empty())) selectAll();
         ImGui::Separator();
         if (ImGui::MenuItem("Preferences...", "Ctrl+,")) preferences_.open(settings_);
         ImGui::EndMenu();
@@ -503,7 +648,11 @@ void MainWindow::handleKeyboard() {
     if (ctrl && pressed(ImGuiKey_Q)) quit_ = true;
     if (pressed(ImGuiKey_F1)) openSyntaxHelp_ = true;
     if (pressed(ImGuiKey_F5)) rescan();
-    if ((ctrl && pressed(ImGuiKey_F)) || pressed(ImGuiKey_Escape)) focusSearch_ = true;
+    if (ctrl && pressed(ImGuiKey_F)) focusSearch_ = true;
+    if (pressed(ImGuiKey_Escape)) {  // back to the search box, multi-selection collapses to the cursor
+        focusSearch_ = true;
+        if (markedCount_ > 1) selectOnly(selectedRow_);
+    }
 
     if (ctrl && (pressed(ImGuiKey_Equal) || pressed(ImGuiKey_KeypadAdd))) setZoom(settings_.fontZoom + 0.1f);
     if (ctrl && (pressed(ImGuiKey_Minus) || pressed(ImGuiKey_KeypadSubtract))) setZoom(settings_.fontZoom - 0.1f);
@@ -523,13 +672,43 @@ void MainWindow::handleKeyboard() {
     const int count = static_cast<int>(results_.size());
     auto moveSelection = [&](int delta) {
         if (count == 0) return;
-        selectedRow_ = std::clamp(selectedRow_ < 0 ? 0 : selectedRow_ + delta, 0, count - 1);
+        const int target = std::clamp(selectedRow_ < 0 ? 0 : selectedRow_ + delta, 0, count - 1);
+        if (shift) {
+            if (anchorRow_ < 0) anchorRow_ = selectedRow_ < 0 ? target : selectedRow_;
+            selectRange(anchorRow_, target);
+        } else {
+            selectOnly(target);
+        }
         scrollToSelected_ = true;
     };
+    const bool typing = ImGui::IsAnyItemActive();
+    const bool navigated = ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow) ||
+                           ImGui::IsKeyPressed(ImGuiKey_PageDown) || ImGui::IsKeyPressed(ImGuiKey_PageUp);
     if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) moveSelection(1);
     if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) moveSelection(-1);
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) moveSelection(20);
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) moveSelection(-20);
+    // arrows move focus to the list (like Everything), so delete / ctrl+a / enter act on the results
+    if (navigated && typing) ImGui::ClearActiveID();
+
+    // in the list, typing goes back to the search box
+    if (!typing && !ctrl) {
+        std::string typed;
+        for (ImWchar c : ImGui::GetIO().InputQueueCharacters) {
+            if (c < 32) continue;
+            char utf8[5];
+            ImTextCharToUtf8(utf8, c);
+            typed += utf8;
+        }
+        if (!typed.empty()) {
+            setQuery(queryBuf_ + typed);
+        } else if (pressed(ImGuiKey_Backspace)) {
+            std::string q = queryBuf_;
+            while (!q.empty() && (static_cast<unsigned char>(q.back()) & 0xC0) == 0x80) q.pop_back();  // utf-8 tail
+            if (!q.empty()) q.pop_back();
+            setQuery(q);
+        }
+    }
 
     if (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter)) {
         if (ctrl)
@@ -538,6 +717,12 @@ void MainWindow::handleKeyboard() {
             openSelected();
     }
     if (ctrl && shift && pressed(ImGuiKey_C)) copySelectedPath();
+
+    // while typing, ctrl+a / delete belong to the search box. after clicking a row they're ours
+    if (!ImGui::IsAnyItemActive()) {
+        if (ctrl && pressed(ImGuiKey_A)) selectAll();
+        if (pressed(ImGuiKey_Delete)) requestTrash();
+    }
 }
 
 void MainWindow::drawResultsTable() {
@@ -596,7 +781,8 @@ void MainWindow::drawResultsTable() {
                 const RecordId id = results_[row];
                 const FileRecord& r = index_->record(id);
                 const bool isDir = r.flags & kIsDir;
-                const bool selected = row == selectedRow_;
+                const bool selected = isMarked(id) || (markedCount_ == 0 && row == selectedRow_);
+                const bool cursor = row == selectedRow_;
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(kName);
@@ -604,18 +790,37 @@ void MainWindow::drawResultsTable() {
 
                 // invisible full-row selectable for clicks, content drawn on top
                 const ImVec2 start = ImGui::GetCursorScreenPos();
-                if (ImGui::Selectable("##row", selected,
+                // imgui draws a hovered row in the hover colour even when it's selected, which makes
+                // a selected row look unselected under the mouse. keep it solid, just a bit brighter
+                if (selected) {
+                    const ImVec4 header = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+                    const ImVec4 brighter(std::min(header.x * 1.12f, 1.0f), std::min(header.y * 1.12f, 1.0f),
+                                          std::min(header.z * 1.12f, 1.0f), header.w);
+                    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighter);
+                    ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighter);
+                }
+                const bool clicked =
+                    ImGui::Selectable("##row", selected,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap |
-                                          ImGuiSelectableFlags_AllowDoubleClick)) {
-                    selectedRow_ = row;
-                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openSelected();
+                                          ImGuiSelectableFlags_AllowDoubleClick);
+                if (selected) ImGui::PopStyleColor(2);
+                if (clicked) {
+                    const ImGuiIO& io = ImGui::GetIO();
+                    if (io.KeyCtrl)
+                        toggleRow(row);
+                    else if (io.KeyShift && anchorRow_ >= 0)
+                        selectRange(anchorRow_, row);
+                    else
+                        selectOnly(row);
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !io.KeyCtrl && !io.KeyShift)
+                        openSelected();
                 }
                 if (ImGui::BeginPopupContextItem("row_menu")) {
-                    selectedRow_ = row;
+                    if (!selected) selectOnly(row);  // right click outside the selection = select just that
                     drawRowContextMenu(id);
                     ImGui::EndPopup();
                 }
-                if (selected && scrollToSelected_) {
+                if (cursor && scrollToSelected_) {
                     ImGui::SetScrollHereY(0.5f);
                     scrollToSelected_ = false;
                 }
@@ -655,11 +860,21 @@ void MainWindow::drawResultsTable() {
 
 void MainWindow::drawRowContextMenu(RecordId id) {
     const bool isDir = index_->record(id).flags & kIsDir;
-    if (ImGui::MenuItem("Open", "Enter")) openSelected();
-    if (ImGui::MenuItem(isDir ? "Open Parent Folder" : "Open Containing Folder", "Ctrl+Enter")) revealSelected();
+    const size_t n = std::max<size_t>(markedCount_, 1);
+    const std::string items = n == 1 ? "" : " " + std::to_string(n) + " Items";
+    if (ImGui::MenuItem(("Open" + items).c_str(), "Enter")) openSelected();
+    if (ImGui::MenuItem(n > 1   ? "Show in File Manager"
+                        : isDir ? "Open Parent Folder"
+                                : "Open Containing Folder",
+                        "Ctrl+Enter"))
+        revealSelected();
     ImGui::Separator();
-    if (ImGui::MenuItem("Copy Full Path", "Ctrl+Shift+C")) copySelectedPath();
-    if (ImGui::MenuItem("Copy Name")) copySelectedName();
+    if (ImGui::MenuItem(n > 1 ? "Copy Full Paths" : "Copy Full Path", "Ctrl+Shift+C")) copySelectedPath();
+    if (ImGui::MenuItem(n > 1 ? "Copy Names" : "Copy Name")) copySelectedName();
+    ImGui::Separator();
+    if (ImGui::MenuItem(("Move" + items + " to Trash").c_str(), "Delete", false,
+                        index_->record(id).parent != kNoParent))
+        requestTrash();
 }
 
 void MainWindow::drawStatusBar() {
@@ -682,6 +897,8 @@ void MainWindow::drawStatusBar() {
         std::string age = cachedIndexTime_ ? "index from " + formatAge(cachedIndexTime_) + ", updating" : "rescanning";
         ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", objectCount_, results_.size(), age.c_str(),
                     scanned);
+    } else if (markedCount_ > 1) {
+        ImGui::Text("%zu objects   ·   %zu results   ·   %zu selected", objectCount_, results_.size(), markedCount_);
     } else if (cachedIndexTime_) {
         ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   index from %s", objectCount_,
                     results_.size(), searchMs_, formatAge(cachedIndexTime_).c_str());
@@ -721,7 +938,9 @@ void MainWindow::drawHelpPopups() {
     if (openSyntaxHelp_) ImGui::OpenPopup("Search Syntax");
     if (openAbout_) ImGui::OpenPopup("About FindEverything");
     if (openUpdates_) ImGui::OpenPopup("Check for Updates");
-    openSyntaxHelp_ = openAbout_ = openUpdates_ = false;
+    if (openTrashConfirm_) ImGui::OpenPopup("Move to Trash");
+    if (openManyConfirm_) ImGui::OpenPopup("Open Many Items");
+    openSyntaxHelp_ = openAbout_ = openUpdates_ = openTrashConfirm_ = openManyConfirm_ = false;
 
     const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
 
@@ -806,6 +1025,56 @@ void MainWindow::drawHelpPopups() {
         ImGui::SameLine();
         if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // "are you sure" for the destructive / noisy bulk actions. lists a few of the items
+    auto listPending = [&] {
+        const size_t shown = std::min<size_t>(pendingIds_.size(), 6);
+        for (size_t i = 0; i < shown; ++i) {
+            ImGui::TextColored(themeColors().dimText, "  %s", index_->fullPath(pendingIds_[i]).c_str());
+        }
+        if (pendingIds_.size() > shown)
+            ImGui::TextColored(themeColors().dimText, "  and %zu more", pendingIds_.size() - shown);
+        ImGui::Spacing();
+    };
+    const ImVec2 button(ImGui::GetFontSize() * 8, 0);
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Move to Trash", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (pendingIds_.size() == 1)
+            ImGui::Text("Move this item to the Trash?");
+        else
+            ImGui::Text("Move these %zu items to the Trash?", pendingIds_.size());
+        listPending();
+        ImGui::TextColored(themeColors().dimText, "You can restore them from the Trash in your file manager.");
+        ImGui::Spacing();
+        if (ImGui::Button("Move to Trash", button)) {
+            moveSelectionToTrash();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", button) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            pendingIds_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Open Many Items", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Open %zu items at once?", pendingIds_.size());
+        listPending();
+        if (ImGui::Button("Open All", button)) {
+            openIds(pendingIds_);
+            pendingIds_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", button) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            pendingIds_.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

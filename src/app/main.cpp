@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "platform/AppBus.h"
 #include "platform/Appearance.h"
 #include "platform/Paths.h"
 #include "stb_image.h"
@@ -56,19 +57,32 @@ fe::WindowGeometry captureGeometry(GLFWwindow* window, fe::WindowGeometry g) {
 int main(int argc, char** argv) {
     bool background = false;  // the autostart entry passes --minimized
     const char* search = nullptr;
+    bool toggle = false;  // the global shortcut runs us with --toggle
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--minimized") == 0)
             background = true;
+        else if (std::strcmp(argv[i], "--toggle") == 0)
+            toggle = true;
         else if ((std::strcmp(argv[i], "--search") == 0 || std::strcmp(argv[i], "-s") == 0) && i + 1 < argc)
             search = argv[++i];
         else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
-            std::puts("usage: FindEverything [--search TEXT] [--minimized]");
+            std::puts("usage: FindEverything [--search TEXT] [--toggle] [--minimized]");
             return 0;
         }
     }
 
     glfwSetErrorCallback([](int code, const char* msg) { std::fprintf(stderr, "GLFW error %d: %s\n", code, msg); });
     if (!glfwInit()) return 1;
+
+    // already running? pass the request on and quit before opening any window
+    fe::AppBus::Request launch;
+    launch.kind = toggle ? fe::AppBus::Request::Kind::Toggle : fe::AppBus::Request::Kind::Show;
+    launch.search = search ? search : "";
+    fe::AppBus bus(launch, [] { glfwPostEmptyEvent(); });
+    if (!bus.primary()) {
+        glfwTerminate();
+        return 0;
+    }
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
@@ -133,6 +147,7 @@ int main(int argc, char** argv) {
             const bool visible = glfwGetWindowAttrib(window, GLFW_VISIBLE);
             glfwWaitEventsTimeout(visible ? 0.1 : 0.5);
 
+            for (const fe::AppBus::Request& request : bus.takeRequests()) app.remote(request);
             app.tick();
             switch (app.takeWindowRequest()) {
                 case fe::MainWindow::WindowRequest::Show:
@@ -146,7 +161,9 @@ int main(int argc, char** argv) {
                     glfwIconifyWindow(window);
                     break;
                 case fe::MainWindow::WindowRequest::Toggle:
-                    if (glfwGetWindowAttrib(window, GLFW_VISIBLE) && !glfwGetWindowAttrib(window, GLFW_ICONIFIED))
+                    // hide only if it's actually in front, otherwise the shortcut should bring it forward
+                    if (glfwGetWindowAttrib(window, GLFW_VISIBLE) && !glfwGetWindowAttrib(window, GLFW_ICONIFIED) &&
+                        glfwGetWindowAttrib(window, GLFW_FOCUSED))
                         hideWindow();
                     else
                         showWindow();

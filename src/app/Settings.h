@@ -24,7 +24,9 @@ struct Settings {
     bool trayIcon = true;
     bool closeToTray = true;  // closing the window keeps us running in the tray
     bool rescanOnStartup = true;
-    bool liveUpdates = true;  // inotify, keeps the index current while running
+    bool liveUpdates = true;            // inotify, keeps the index current while running
+    bool globalShortcut = false;        // off until asked, it writes into the desktop's settings
+    std::string shortcut = "<Super>f";  // gtk accelerator
 
     std::vector<std::string> excludedVolumes;  // mount points that got unticked
     std::vector<std::string> excludedFolders;

@@ -11,7 +11,7 @@ std::string configDirectory();  // $XDG_CONFIG_HOME/findeverything (~/.config/fi
 std::string indexCachePath();    // <cache>/index.bin
 std::string settingsFilePath();  // <config>/settings.ini
 
-// from /proc/self/exe
+// $APPIMAGE if we run from one, /proc/self/exe otherwise
 std::string executablePath();
 
 }  // namespace fe

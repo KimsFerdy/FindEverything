@@ -22,7 +22,10 @@ private:
     void drawIndexesTab();
     void drawAppearanceTab();
 
+    void drawShortcutRecorder();
+
     bool requestOpen_ = false;
+    bool recording_ = false;  // waiting for a key combo
     Settings draft_;
     std::vector<Volume> volumes_;
     char folderInput_[1024] = {};

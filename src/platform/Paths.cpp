@@ -37,6 +37,8 @@ std::string indexCachePath() { return fileIn(cacheDirectory(), "index.bin"); }
 std::string settingsFilePath() { return fileIn(configDirectory(), "settings.ini"); }
 
 std::string executablePath() {
+    // inside an AppImage /proc/self/exe points into a temporary mount, $APPIMAGE is the real file
+    if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) return appimage;
     std::error_code ec;
     fs::path p = fs::read_symlink("/proc/self/exe", ec);
     return ec ? std::string() : p.string();

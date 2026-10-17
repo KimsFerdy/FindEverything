@@ -17,6 +17,7 @@
 #include "core/PathCache.h"
 #include "core/Query.h"
 #include "core/Sort.h"
+#include "platform/AppBus.h"
 #include "platform/Appearance.h"
 #include "platform/Scanner.h"
 #include "platform/Tray.h"
@@ -35,9 +36,10 @@ public:
     // background = launched at login (tray or minimized instead of popping up)
     void start(bool background);
     void rescan();
-    void setQuery(const std::string& text);  // --search, like Everything's -search
-    void tick();                             // every loop iteration, even while the window is hidden
-    void draw();                             // only while visible
+    void setQuery(const std::string& text);       // --search, like Everything's -search
+    void remote(const AppBus::Request& request);  // another launch / the global shortcut
+    void tick();                                  // every loop iteration, even while the window is hidden
+    void draw();                                  // only while visible
 
     // stuff main() has to do (glfw / font texture)
     enum class WindowRequest { None, Show, Hide, Toggle, Minimize };
@@ -88,6 +90,7 @@ private:
     char queryBuf_[512] = {};
     SearchOptions searchOptions_;
     bool focusSearch_ = true;
+    bool queryReplaced_ = false;     // setQuery() from outside, the input needs to reload
     std::vector<RecordId> results_;  // already sorted
     double searchMs_ = 0;
     SortKey sortKey_ = SortKey::Name;

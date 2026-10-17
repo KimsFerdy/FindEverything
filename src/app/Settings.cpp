@@ -62,6 +62,10 @@ Settings loadSettings() {
 
         if (key == "rescan_on_startup")
             s.rescanOnStartup = parseBool(value);
+        else if (key == "global_shortcut")
+            s.globalShortcut = parseBool(value);
+        else if (key == "shortcut")
+            s.shortcut = value;
         else if (key == "live_updates")
             s.liveUpdates = parseBool(value);
         else if (key == "start_in_tray")
@@ -105,6 +109,8 @@ bool saveSettings(const Settings& s) {
             << "[general]\n"
             << "rescan_on_startup = " << (s.rescanOnStartup ? "true" : "false") << "\n"
             << "live_updates = " << (s.liveUpdates ? "true" : "false") << "\n"
+            << "global_shortcut = " << (s.globalShortcut ? "true" : "false") << "\n"
+            << "shortcut = " << s.shortcut << "\n"
             << "start_in_tray = " << (s.startInTray ? "true" : "false") << "\n"
             << "tray_icon = " << (s.trayIcon ? "true" : "false") << "\n"
             << "close_to_tray = " << (s.closeToTray ? "true" : "false") << "\n\n"

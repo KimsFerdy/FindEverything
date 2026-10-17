@@ -37,9 +37,11 @@ fe_warnings(fe_core)
 
 # platform: scanning, mounts, xdg, desktop integration
 add_library(fe_platform STATIC
+    src/platform/AppBus.cpp
     src/platform/Appearance.cpp
     src/platform/Autostart.cpp
     src/platform/FileIcons.cpp
+    src/platform/GlobalShortcut.cpp
     src/platform/IconTheme.cpp
     src/platform/Inotify.cpp
     src/platform/MimeDatabase.cpp

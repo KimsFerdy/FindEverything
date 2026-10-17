@@ -10,7 +10,9 @@
 #include "core/IndexFile.h"
 #include "core/Search.h"
 #include "imgui.h"
+#include "imgui_internal.h"  // ClearActiveID
 #include "platform/Autostart.h"
+#include "platform/GlobalShortcut.h"
 #include "platform/Paths.h"
 #include "platform/Shell.h"
 #include "stb_image.h"
@@ -186,6 +188,13 @@ void MainWindow::setQuery(const std::string& text) {
     text.copy(queryBuf_, sizeof queryBuf_ - 1);
     queryBuf_[std::min(text.size(), sizeof queryBuf_ - 1)] = '\0';
     runSearch();  // no-op until the index is in, adoptIndex searches again anyway
+    queryReplaced_ = true;
+}
+
+void MainWindow::remote(const AppBus::Request& request) {
+    if (!request.search.empty()) setQuery(request.search);
+    windowRequest_ = request.kind == AppBus::Request::Kind::Toggle ? WindowRequest::Toggle : WindowRequest::Show;
+    waitingForTray_ = false;
 }
 
 void MainWindow::tick() {
@@ -276,6 +285,21 @@ void MainWindow::applyPreferences(Settings next) {
                          !std::equal(std::begin(next.accent), std::end(next.accent), std::begin(settings_.accent));
     const bool refont = restyle || next.fontZoom != settings_.fontZoom;
 
+    const bool shortcutChanged =
+        next.globalShortcut != settings_.globalShortcut || (next.globalShortcut && next.shortcut != settings_.shortcut);
+    if (shortcutChanged) {
+        if (!setGlobalShortcut(next.globalShortcut ? next.shortcut : "")) {
+            setStatus("Could not change the global shortcut");
+            next.globalShortcut = settings_.globalShortcut;
+            next.shortcut = settings_.shortcut;
+        } else if (next.globalShortcut) {
+            const std::string conflict = shortcutConflict(next.shortcut);
+            setStatus(conflict.empty() ? prettyAccel(next.shortcut) + " now opens FindEverything"
+                                       : prettyAccel(next.shortcut) + " is also used by \"" + conflict +
+                                             "\", pick another one if it doesn't work");
+        }
+    }
+
     next.window = settings_.window;  // the dialog's copy is stale
     settings_ = std::move(next);
     if (!saveSettings(settings_)) setStatus("Could not save settings to " + settingsFilePath());
@@ -348,6 +372,13 @@ void MainWindow::draw() {
     handleKeyboard();
 
     ImGui::SetNextItemWidth(-FLT_MIN);
+    // an active InputText edits its own copy and ignores changes to our buffer, so deactivate it
+    // and focus it again, that makes imgui reload the text
+    if (queryReplaced_) {
+        ImGui::ClearActiveID();
+        focusSearch_ = true;
+        queryReplaced_ = false;
+    }
     if (focusSearch_) {
         ImGui::SetKeyboardFocusHere();
         focusSearch_ = false;

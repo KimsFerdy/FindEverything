@@ -5,12 +5,69 @@
 
 #include "app/Theme.h"
 #include "imgui.h"
+#include "platform/GlobalShortcut.h"
 
 namespace fe {
 
 namespace {
 
 constexpr const char* kTitle = "Preferences";
+
+// imgui key -> gtk accelerator key name
+struct KeyName {
+    ImGuiKey key;
+    const char* name;
+};
+constexpr KeyName kKeyNames[] = {
+    {ImGuiKey_Space, "space"},
+    {ImGuiKey_Comma, "comma"},
+    {ImGuiKey_Period, "period"},
+    {ImGuiKey_Slash, "slash"},
+    {ImGuiKey_Semicolon, "semicolon"},
+    {ImGuiKey_Apostrophe, "apostrophe"},
+    {ImGuiKey_Minus, "minus"},
+    {ImGuiKey_Equal, "equal"},
+    {ImGuiKey_GraveAccent, "grave"},
+    {ImGuiKey_Backslash, "backslash"},
+    {ImGuiKey_LeftBracket, "bracketleft"},
+    {ImGuiKey_RightBracket, "bracketright"},
+    {ImGuiKey_Insert, "Insert"},
+    {ImGuiKey_Home, "Home"},
+    {ImGuiKey_End, "End"},
+    {ImGuiKey_PageUp, "Page_Up"},
+    {ImGuiKey_PageDown, "Page_Down"},
+    {ImGuiKey_Pause, "Pause"},
+};
+
+// the key pressed this frame as a gtk accelerator ("<Super>f"), "" if none / no modifier
+std::string pressedAccel() {
+    const ImGuiIO& io = ImGui::GetIO();
+    std::string key;
+    for (int k = ImGuiKey_A; k <= ImGuiKey_Z && key.empty(); ++k) {
+        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) key = std::string(1, char('a' + (k - ImGuiKey_A)));
+    }
+    for (int k = ImGuiKey_0; k <= ImGuiKey_9 && key.empty(); ++k) {
+        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) key = std::string(1, char('0' + (k - ImGuiKey_0)));
+    }
+    bool functionKey = false;
+    for (int k = ImGuiKey_F1; k <= ImGuiKey_F12 && key.empty(); ++k) {
+        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(k), false)) {
+            key = "F" + std::to_string(k - ImGuiKey_F1 + 1);
+            functionKey = true;
+        }
+    }
+    for (const KeyName& kn : kKeyNames) {
+        if (key.empty() && ImGui::IsKeyPressed(kn.key, false)) key = kn.name;
+    }
+    const bool anyMod = io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
+    if (key.empty() || (!anyMod && !functionKey)) return {};  // plain letters would eat normal typing
+    std::string accel;
+    if (io.KeySuper) accel += "<Super>";
+    if (io.KeyCtrl) accel += "<Primary>";
+    if (io.KeyAlt) accel += "<Alt>";
+    if (io.KeyShift) accel += "<Shift>";
+    return accel + key;
+}
 
 bool contains(const std::vector<std::string>& list, const std::string& value) {
     return std::find(list.begin(), list.end(), value) != list.end();
@@ -26,6 +83,7 @@ void hint(const char* text) {
 
 void PreferencesDialog::open(const Settings& current) {
     draft_ = current;
+    recording_ = false;
     volumes_ = listVolumes();
     folderInput_[0] = '\0';
     requestOpen_ = true;
@@ -67,7 +125,8 @@ PreferencesDialog::Result PreferencesDialog::draw() {
     const ImVec2 button(em * 6, 0);
     ImGui::SetCursorPosX(ImGui::GetWindowWidth() - button.x * 2 - ImGui::GetStyle().ItemSpacing.x -
                          ImGui::GetStyle().WindowPadding.x);
-    if (ImGui::Button("Cancel", button) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) result = Result::Cancel;
+    if (ImGui::Button("Cancel", button) || (!recording_ && ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
+        result = Result::Cancel;
     ImGui::SameLine();
     if (ImGui::Button("OK", button)) result = Result::Ok;
     if (result != Result::None) ImGui::CloseCurrentPopup();
@@ -96,11 +155,47 @@ void PreferencesDialog::drawGeneralTab() {
     ImGui::Unindent();
 
     ImGui::Spacing();
+    drawShortcutRecorder();
+
+    ImGui::Spacing();
     ImGui::Checkbox("Rescan disks on startup", &draft_.rescanOnStartup);
     ImGui::Indent();
     hint(
         "Off: start with the saved index and only rescan when you press F5. "
         "Faster and quieter, but new files won't show up until you do.");
+    ImGui::Unindent();
+}
+
+void PreferencesDialog::drawShortcutRecorder() {
+    const ShortcutDesktop desktop = shortcutDesktop();
+    ImGui::BeginDisabled(desktop == ShortcutDesktop::Unsupported);
+    ImGui::Checkbox("Global shortcut", &draft_.globalShortcut);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!draft_.globalShortcut);
+    const std::string label = recording_ ? std::string("Press a key combo...") : prettyAccel(draft_.shortcut);
+    if (ImGui::Button((label + "###shortcut").c_str(), ImVec2(ImGui::GetFontSize() * 10, 0))) recording_ = true;
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+
+    if (recording_) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            recording_ = false;
+        } else if (std::string accel = pressedAccel(); !accel.empty()) {
+            draft_.shortcut = accel;
+            recording_ = false;
+        }
+    }
+
+    ImGui::Indent();
+    if (desktop == ShortcutDesktop::Unsupported) {
+        hint(
+            "Can't set it up automatically here. Add a shortcut in your desktop's keyboard settings "
+            "that runs: FindEverything --toggle");
+    } else {
+        const std::string text = std::string("Shows / hides FindEverything from anywhere. Added to ") +
+                                 shortcutDesktopName(desktop) + "'s keyboard shortcuts, you can change it there too.";
+        hint(text.c_str());
+    }
     ImGui::Unindent();
 }
 

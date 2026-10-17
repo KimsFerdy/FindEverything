@@ -6,6 +6,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -26,8 +27,15 @@ public:
 
 private:
     void runSearch();
+    void handleKeyboard();
     void drawResultsTable();
+    void drawRowContextMenu(RecordId id);
     void drawStatusBar();
+
+    void openSelected();
+    void revealSelected();
+    void copySelectedPath();
+    void setStatus(std::string message);
 
     std::unique_ptr<Index> index_;  // owned by the UI thread
     std::unique_ptr<Index> pending_;
@@ -38,8 +46,15 @@ private:
     double scanSeconds_ = 0;
 
     char queryBuf_[512] = {};
+    bool focusSearch_ = true;
     std::vector<RecordId> results_;
     double searchMs_ = 0;
+
+    int selectedRow_ = -1;  // index into results_
+    bool scrollToSelected_ = false;
+
+    std::string statusMessage_;  // transient, e.g. "Copied path"
+    std::chrono::steady_clock::time_point statusTime_;
 };
 
 }  // namespace fe

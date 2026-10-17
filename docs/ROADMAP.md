@@ -13,10 +13,14 @@ Each milestone ends with something you can run.
 ## M2: GUI ✅ (scaffolded)
 - [x] ImGui window, search-as-you-type, virtualised results table
 - [x] Background indexing with a live counter
-- [ ] Double-click opens the file (`xdg-open` via `fork` + `execvp`)
-- [ ] Right-click → "Open containing folder", "Copy path"
+- [x] Double-click / Enter opens the file (`xdg-open` via `fork` + `execvp`)
+- [x] Right-click → Open, Open containing folder (FileManager1 D-Bus), Copy path / name
+- [x] Keyboard: ↑↓ PgUp PgDn, Enter, Ctrl+Enter, Ctrl+Shift+C, Ctrl+F / Esc
+- [x] System font (gsettings + fontconfig), dark/light + accent colour (XDG portal)
 - [ ] Click a column header to sort (`ImGuiTableFlags_Sortable`)
-- [ ] Ctrl+F / Esc keyboard shortcuts, remember window size
+- [ ] Remember window size and column widths
+- [ ] Follow theme changes live (portal `SettingChanged` signal)
+- [ ] Non-Latin file names: upgrade to ImGui 1.92 dynamic fonts + fallback fonts
 
 ## M3: Live updates on Linux
 - [ ] `Index` supports delete and rename (tombstones + periodic compaction)

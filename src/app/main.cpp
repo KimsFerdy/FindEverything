@@ -2,6 +2,8 @@
 // and run the Dear ImGui frame loop.
 
 #include "app/MainWindow.h"
+#include "app/Theme.h"
+#include "platform/Appearance.h"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -38,7 +40,16 @@ int main() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;  // don't litter imgui.ini in the working dir
-    ImGui::StyleColorsDark();
+
+    // Look like the rest of the desktop: system font, dark/light, accent colour.
+    // Content scale is >1 on HiDPI screens (from Xft.dpi on X11).
+    float scaleX = 1.0f, scaleY = 1.0f;
+    glfwGetWindowContentScale(window, &scaleX, &scaleY);
+    const fe::SystemAppearance appearance = fe::querySystemAppearance();
+    fe::applyTheme(appearance, scaleX);
+    fe::loadFonts(appearance, scaleX);
+    const ImVec4 bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glslVersion);
 
@@ -60,7 +71,7 @@ int main() {
             int w, h;
             glfwGetFramebufferSize(window, &w, &h);
             glViewport(0, 0, w, h);
-            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            glClearColor(bg.x, bg.y, bg.z, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             glfwSwapBuffers(window);

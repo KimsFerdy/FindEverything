@@ -39,6 +39,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/LinuxScanner.cpp
         src/platform/linux/LinuxMounts.cpp
         src/platform/linux/LinuxWatcher.cpp
+        src/platform/linux/LinuxShell.cpp
+        src/platform/linux/LinuxAppearance.cpp
+        src/platform/linux/Process.cpp
     )
 else()
     # Windows / macOS use the portable std::filesystem scanner until native
@@ -46,10 +49,15 @@ else()
     set(FE_PLATFORM_SOURCES
         src/platform/generic/GenericScanner.cpp
         src/platform/generic/GenericWatcher.cpp
+        src/platform/generic/GenericShell.cpp
+        src/platform/generic/GenericAppearance.cpp
     )
 endif()
 add_library(fe_platform STATIC ${FE_PLATFORM_SOURCES})
 target_link_libraries(fe_platform PUBLIC fe_core)
+if(WIN32)
+    target_link_libraries(fe_platform PUBLIC shell32 advapi32)
+endif()
 fe_warnings(fe_platform)
 
 # ---------------------------------------------------------------------------
@@ -67,6 +75,7 @@ if(FE_BUILD_GUI)
     add_executable(FindEverything
         src/app/main.cpp
         src/app/MainWindow.cpp
+        src/app/Theme.cpp
     )
     target_link_libraries(FindEverything PRIVATE fe_platform imgui)
     fe_warnings(FindEverything)

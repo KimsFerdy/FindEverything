@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/IconCache.h"
 #include "app/PreferencesDialog.h"
 #include "app/Settings.h"
 #include "core/Index.h"
@@ -113,6 +114,7 @@ private:
     float displayScale_ = 1.0f;
     Settings settings_;
     PreferencesDialog preferences_;
+    std::unique_ptr<IconCache> icons_;  // recreated when the row height changes (zoom)
 
     bool openSyntaxHelp_ = false;
     bool openAbout_ = false;

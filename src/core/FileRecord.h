@@ -11,6 +11,7 @@ inline constexpr RecordId kNoParent = UINT32_MAX;
 enum RecordFlags : uint8_t {
     kIsDir     = 1 << 0,
     kIsSymlink = 1 << 1,
+    kIsExecutable = 1 << 2,  // regular file with an execute permission bit
 };
 
 // One entry in the index. Kept small on purpose: millions of these live in RAM.

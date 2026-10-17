@@ -478,6 +478,8 @@ void MainWindow::drawResultsTable() {
         const ThemeColors& theme = themeColors();
         const float lineHeight = ImGui::GetTextLineHeight();
         const float iconWidth = lineHeight + ImGui::GetStyle().ItemInnerSpacing.x;
+        const int iconPx = static_cast<int>(lineHeight + 0.5f);
+        if (!icons_ || icons_->sizePx() != iconPx) icons_ = std::make_unique<IconCache>(appearance().iconTheme, iconPx);
 
         // The clipper only gives us the rows currently on screen, so a list of
         // 5 million results costs the same to draw as a list of 30.
@@ -514,9 +516,16 @@ void MainWindow::drawResultsTable() {
                 }
 
                 if (selected) ImGui::PushStyleColor(ImGuiCol_Text, theme.selectedText);
-                drawIcon(start, lineHeight, isDir, selected ? theme.selectedText : isDir ? theme.folderIcon : theme.fileIcon);
-                ImGui::SetCursorScreenPos(ImVec2(start.x + iconWidth, start.y));
                 std::string_view name = index_->name(id);
+                if (ImTextureID tex = icons_->textureFor(name, r.flags, r.parent == kNoParent)) {
+                    const float px = static_cast<float>(iconPx);
+                    const ImVec2 p(start.x, start.y + (lineHeight - px) * 0.5f);
+                    ImGui::GetWindowDrawList()->AddImage(tex, p, ImVec2(p.x + px, p.y + px));
+                } else {
+                    drawIcon(start, lineHeight, isDir,
+                             selected ? theme.selectedText : isDir ? theme.folderIcon : theme.fileIcon);
+                }
+                ImGui::SetCursorScreenPos(ImVec2(start.x + iconWidth, start.y));
                 ImGui::TextUnformatted(name.data(), name.data() + name.size());
 
                 // TableSetColumnIndex returns false for hidden columns: skip their work.

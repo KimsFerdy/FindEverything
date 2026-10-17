@@ -128,6 +128,8 @@ SystemAppearance querySystemAppearance() {
     if (!scaleStr.empty()) textScale = std::max(0.5f, std::strtof(scaleStr.c_str(), nullptr));
     ap.fontSizePx = sizePt * 96.0f / 72.0f * textScale;
 
+    ap.iconTheme = gsettingsGet(schema, "icon-theme");
+
     return ap;
 }
 

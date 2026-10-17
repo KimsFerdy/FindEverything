@@ -11,6 +11,7 @@ struct SystemAppearance {
     float accent[3] = {0.26f, 0.59f, 0.98f};  // RGB 0..1
     std::string fontFile;                     // TrueType file; empty = ImGui's built-in font
     float fontSizePx = 13.0f;                 // at 100% display scale
+    std::string iconTheme;                    // "Mint-Y-Aqua"; empty = platform default
 };
 
 // Asks the OS once. Cheap enough to call at startup.

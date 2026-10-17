@@ -47,6 +47,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/platform/linux/Process.cpp
         src/platform/linux/LinuxVolumes.cpp
         src/platform/linux/LinuxAutostart.cpp
+        src/platform/linux/MimeDatabase.cpp
+        src/platform/linux/IconTheme.cpp
+        src/platform/linux/LinuxFileIcons.cpp
     )
 else()
     # Windows / macOS use the portable std::filesystem scanner until native
@@ -58,6 +61,7 @@ else()
         src/platform/generic/GenericAppearance.cpp
         src/platform/generic/GenericVolumes.cpp
         src/platform/generic/GenericAutostart.cpp
+        src/platform/generic/GenericFileIcons.cpp
     )
 endif()
 add_library(fe_platform STATIC ${FE_PLATFORM_SOURCES} src/platform/Paths.cpp)
@@ -85,8 +89,9 @@ if(FE_BUILD_GUI)
         src/app/Theme.cpp
         src/app/Settings.cpp
         src/app/PreferencesDialog.cpp
+        src/app/IconCache.cpp
     )
-    target_link_libraries(FindEverything PRIVATE fe_platform imgui)
+    target_link_libraries(FindEverything PRIVATE fe_platform imgui image_decoders)
     target_compile_definitions(FindEverything PRIVATE FE_VERSION="${PROJECT_VERSION}")
     fe_warnings(FindEverything)
 endif()

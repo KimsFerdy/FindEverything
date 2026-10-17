@@ -45,6 +45,11 @@ Each milestone ends with something you can run.
       start at login (XDG autostart, `--minimized`), rescan on startup, disks to
       index (one root per mount, `st_dev` boundary), excluded folders, theme,
       accent, font size
+- [x] File-type icons from the system icon theme (shared-mime-info globs2 →
+      MIME type → freedesktop icon theme lookup with inheritance; PNG via
+      stb_image, SVG via nanosvg; one GL texture per type)
+- [ ] Windows (SHGetFileInfo) and macOS (NSWorkspace) file icons
+- [ ] Content sniffing for files without an extension (mime/magic)
 - [ ] System tray icon (so "start minimized" can hide to tray)
 - [ ] Notice newly plugged-in drives (watch /proc/self/mountinfo with poll())
 

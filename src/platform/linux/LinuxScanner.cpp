@@ -75,6 +75,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
             uint64_t size = 0;
             int64_t mtime = 0;
             dev_t device = dir.device;
+            bool executable = false;
             const bool needStat = opts.collectMetadata || type == DT_UNKNOWN || (opts.stayOnFilesystem && type == DT_DIR);
             if (needStat) {
                 struct stat st {};
@@ -82,6 +83,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
                     size = static_cast<uint64_t>(st.st_size);
                     mtime = st.st_mtime;
                     device = st.st_dev;
+                    executable = S_ISREG(st.st_mode) && (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH));
                     if (S_ISDIR(st.st_mode)) type = DT_DIR;
                     else if (S_ISLNK(st.st_mode)) type = DT_LNK;
                     else if (type == DT_UNKNOWN) type = DT_REG;
@@ -104,6 +106,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
             uint8_t flags = 0;
             if (type == DT_DIR) flags |= kIsDir;
             if (type == DT_LNK) flags |= kIsSymlink;
+            if (executable) flags |= kIsExecutable;
 
             RecordId id = index.add(dir.id, name, flags, (flags & kIsDir) ? 0 : size, mtime);
             if (progress) progress->entries.fetch_add(1, std::memory_order_relaxed);

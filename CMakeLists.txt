@@ -24,6 +24,7 @@ endfunction()
 # ---------------------------------------------------------------------------
 add_library(fe_core STATIC
     src/core/Index.cpp
+    src/core/IndexFile.cpp
     src/core/PathCache.cpp
     src/core/Query.cpp
     src/core/Search.cpp
@@ -54,7 +55,7 @@ else()
         src/platform/generic/GenericAppearance.cpp
     )
 endif()
-add_library(fe_platform STATIC ${FE_PLATFORM_SOURCES})
+add_library(fe_platform STATIC ${FE_PLATFORM_SOURCES} src/platform/Paths.cpp)
 target_link_libraries(fe_platform PUBLIC fe_core)
 if(WIN32)
     target_link_libraries(fe_platform PUBLIC shell32 advapi32)

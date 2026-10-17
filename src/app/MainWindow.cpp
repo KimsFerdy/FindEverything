@@ -1,7 +1,9 @@
 #include "app/MainWindow.h"
 
 #include "app/Theme.h"
+#include "core/IndexFile.h"
 #include "core/Search.h"
+#include "platform/Paths.h"
 #include "platform/Shell.h"
 
 #include "imgui.h"
@@ -48,6 +50,25 @@ double msSince(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
+std::string formatAge(int64_t unixSeconds) {
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    const int64_t s = std::max<int64_t>(0, now - unixSeconds);
+    char buf[32];
+    if (s < 60) std::snprintf(buf, sizeof buf, "just now");
+    else if (s < 3600) std::snprintf(buf, sizeof buf, "%lld min ago", static_cast<long long>(s / 60));
+    else if (s < 86400) std::snprintf(buf, sizeof buf, "%lld h ago", static_cast<long long>(s / 3600));
+    else std::snprintf(buf, sizeof buf, "%lld days ago", static_cast<long long>(s / 86400));
+    return buf;
+}
+
+std::string joinLines(const std::vector<std::string>& items) {
+    std::string out;
+    for (const std::string& s : items) out += s + '\n';
+    return out;
+}
+
 // Tiny vector icons drawn with ImGui's draw list, so we need no icon font.
 void drawIcon(ImVec2 pos, float lineHeight, bool isDir, ImU32 color) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -73,6 +94,24 @@ MainWindow::~MainWindow() {
     if (scanThread_.joinable()) scanThread_.join();
 }
 
+void MainWindow::start() {
+    cachePath_ = indexCachePath();
+    scanSource_ = joinLines(defaultRoots());
+
+    // Show yesterday's index right away (a sequential read of a few dozen MB),
+    // then refresh it. Without live updates (M3) the cache can be out of date,
+    // so the rescan is what makes results trustworthy again.
+    if (!cachePath_.empty()) {
+        auto index = std::make_unique<Index>();
+        IndexFileInfo info;
+        if (loadIndex(*index, cachePath_, &info) && info.source == scanSource_) {
+            cachedIndexTime_ = info.createdAt;
+            adoptIndex(std::move(index));
+        }
+    }
+    startIndexing();
+}
+
 void MainWindow::startIndexing() {
     if (scanning_) return;
     if (scanThread_.joinable()) scanThread_.join();  // previous scan, already finished
@@ -84,16 +123,37 @@ void MainWindow::startIndexing() {
     scanStart_ = std::chrono::steady_clock::now();
 
     // The old index stays searchable while the new one is built.
-    scanThread_ = std::thread([this] {
+    scanThread_ = std::thread([this, cachePath = cachePath_, source = scanSource_] {
         auto index = std::make_unique<Index>();
         ScanOptions opts;
         opts.roots = defaultRoots();
         opts.excludes = defaultExcludes();
-        scanFilesystem(*index, opts, &progress_);
+        if (!scanFilesystem(*index, opts, &progress_)) return;  // cancelled: app is closing
+
+        // Saved from this thread so the UI never waits for the disk.
+        if (!cachePath.empty()) saveIndex(*index, cachePath, source);
 
         std::lock_guard lock(pendingMutex_);
         pending_ = std::move(index);
     });
+}
+
+void MainWindow::adoptIndex(std::unique_ptr<Index> index) {
+    // Keep the same row selected across the swap (record ids change between scans).
+    std::string selectedPath = (index_ && selectedRow_ >= 0) ? index_->fullPath(results_[selectedRow_]) : "";
+
+    index_ = std::move(index);
+    paths_.build(*index_);
+    runSearch();
+
+    if (selectedPath.empty()) return;
+    std::string_view selectedName = std::string_view(selectedPath).substr(selectedPath.find_last_of("/\\") + 1);
+    for (size_t i = 0; i < results_.size(); ++i) {
+        if (index_->name(results_[i]) == selectedName && index_->fullPath(results_[i]) == selectedPath) {
+            selectedRow_ = static_cast<int>(i);
+            break;
+        }
+    }
 }
 
 bool MainWindow::consumeFontZoomChange() {
@@ -150,11 +210,10 @@ void MainWindow::draw() {
     {
         std::lock_guard lock(pendingMutex_);
         if (pending_) {
-            index_ = std::move(pending_);
-            paths_.build(*index_);
+            adoptIndex(std::move(pending_));
             scanning_ = false;
+            cachedIndexTime_ = 0;
             scanSeconds_ = msSince(scanStart_) / 1000.0;
-            runSearch();
         }
     }
 
@@ -406,7 +465,9 @@ void MainWindow::drawStatusBar() {
     } else if (!index_) {
         ImGui::Text("Indexing...  %llu objects", scanned);
     } else if (scanning_) {
-        ImGui::Text("%zu objects   ·   %zu results   ·   rescanning... %llu", index_->size(), results_.size(), scanned);
+        std::string age = cachedIndexTime_ ? "index from " + formatAge(cachedIndexTime_) + ", updating" : "rescanning";
+        ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", index_->size(), results_.size(), age.c_str(),
+                    scanned);
     } else {
         ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   indexed in %.1f s", index_->size(),
                     results_.size(), searchMs_, scanSeconds_);

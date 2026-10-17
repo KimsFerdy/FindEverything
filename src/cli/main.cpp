@@ -1,12 +1,15 @@
 // fe-cli: index a directory tree, then search it from the terminal.
 //
-//   fe-cli [--root DIR]... [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...
-//   fe-cli --root ~ ext:pdf invoice
-//   fe-cli                           (no query: index "/" and print stats)
+//   fe-cli [--root DIR]... [--rescan] [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...
+//   fe-cli ext:pdf invoice           whole system, using the GUI's cached index if present
+//   fe-cli --rescan                  rescan "/" and refresh the cache
+//   fe-cli --root ~ ext:pdf invoice  scan just ~ (never cached)
 
+#include "core/IndexFile.h"
 #include "core/PathCache.h"
 #include "core/Query.h"
 #include "core/Search.h"
+#include "platform/Paths.h"
 #include "platform/Scanner.h"
 
 #include <chrono>
@@ -26,6 +29,7 @@ int main(int argc, char** argv) {
     fe::ScanOptions opts;
     fe::SearchOptions searchOpts;
     size_t limit = 50;
+    bool rescan = false;
     std::string queryText;
 
     for (int i = 1; i < argc; ++i) {
@@ -34,6 +38,8 @@ int main(int argc, char** argv) {
             opts.roots.push_back(argv[++i]);
         } else if (arg == "--limit" && i + 1 < argc) {
             limit = std::strtoul(argv[++i], nullptr, 10);
+        } else if (arg == "--rescan") {
+            rescan = true;
         } else if (arg == "--no-meta") {
             opts.collectMetadata = false;
         } else if (arg == "--case") {
@@ -43,22 +49,35 @@ int main(int argc, char** argv) {
         } else if (arg == "--path") {
             searchOpts.matchPath = true;
         } else if (arg == "-h" || arg == "--help") {
-            std::puts("usage: fe-cli [--root DIR]... [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...");
+            std::puts("usage: fe-cli [--root DIR]... [--rescan] [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...");
             return 0;
         } else {
             if (!queryText.empty()) queryText += ' ';
             queryText += arg;
         }
     }
-    if (opts.roots.empty()) opts.roots = fe::defaultRoots();
+    // Only whole-system scans share the cache with the GUI.
+    const bool useCache = opts.roots.empty();
+    if (useCache) opts.roots = fe::defaultRoots();
     opts.excludes = fe::defaultExcludes();
+    std::string source;
+    for (const std::string& r : opts.roots) source += r + '\n';
+    const std::string cachePath = useCache ? fe::indexCachePath() : "";
 
     fe::Index index;
-    fe::ScanProgress progress;
     auto t0 = std::chrono::steady_clock::now();
-    fe::scanFilesystem(index, opts, &progress);
-    std::fprintf(stderr, "indexed %zu entries in %.0f ms (%llu unreadable dirs)\n", index.size(), msSince(t0),
-                 static_cast<unsigned long long>(progress.errors.load()));
+    fe::IndexFileInfo info;
+    if (!cachePath.empty() && !rescan && fe::loadIndex(index, cachePath, &info) && info.source == source) {
+        std::fprintf(stderr, "loaded %zu entries from %s in %.0f ms\n", index.size(), cachePath.c_str(), msSince(t0));
+    } else {
+        fe::ScanProgress progress;
+        fe::scanFilesystem(index, opts, &progress);
+        std::fprintf(stderr, "indexed %zu entries in %.0f ms (%llu unreadable dirs)\n", index.size(), msSince(t0),
+                     static_cast<unsigned long long>(progress.errors.load()));
+        if (!cachePath.empty() && fe::saveIndex(index, cachePath, source)) {
+            std::fprintf(stderr, "saved index to %s\n", cachePath.c_str());
+        }
+    }
 
     if (queryText.empty()) return 0;
 

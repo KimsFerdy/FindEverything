@@ -32,6 +32,11 @@ void Index::reserve(size_t records, size_t nameBytes) {
     lowerNames_.reserve(nameBytes);
 }
 
+void Index::rebuildLowerNames() {
+    lowerNames_.resize(names_.size());
+    for (size_t i = 0; i < names_.size(); ++i) lowerNames_[i] = asciiLower(names_[i]);
+}
+
 void Index::clear() {
     records_.clear();
     names_.clear();

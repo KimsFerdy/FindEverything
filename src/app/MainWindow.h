@@ -24,6 +24,8 @@ public:
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;
 
+    // Loads the cached index (instant results), then rescans in the background.
+    void start();
     void startIndexing();
     void draw();  // call once per frame between ImGui::NewFrame() and ImGui::Render()
 
@@ -33,6 +35,7 @@ public:
     bool consumeFontZoomChange();
 
 private:
+    void adoptIndex(std::unique_ptr<Index> index);
     void runSearch();
     void handleKeyboard();
     void drawMenuBar();
@@ -58,6 +61,9 @@ private:
     bool scanning_ = false;
     std::chrono::steady_clock::time_point scanStart_;
     double scanSeconds_ = 0;
+    std::string cachePath_;        // ~/.cache/findeverything/index.bin ("" = no caching)
+    std::string scanSource_;       // roots, stored in the cache to detect config changes
+    int64_t cachedIndexTime_ = 0;  // unix time of the loaded cache, 0 = fresh scan
 
     // --- search
     char queryBuf_[512] = {};

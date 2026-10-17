@@ -1,10 +1,12 @@
 // Minimal dependency-free tests. Swap in Catch2 or GoogleTest once this grows.
 
 #include "core/Index.h"
+#include "core/IndexFile.h"
 #include "core/Query.h"
 #include "core/Search.h"
 
 #include <cstdio>
+#include <filesystem>
 
 static int g_failures = 0;
 
@@ -89,11 +91,40 @@ static void testSearchOptions() {
     CHECK(count("src", filesOnly) == 0);
 }
 
+static void testIndexFile() {
+    namespace fs = std::filesystem;
+    const std::string path = (fs::temp_directory_path() / "fe_test_index.bin").string();
+
+    fe::Index idx;
+    fe::RecordId root = idx.add(fe::kNoParent, "/", fe::kIsDir, 0, 0);
+    fe::RecordId home = idx.add(root, "Home", fe::kIsDir, 0, 111);
+    idx.add(home, "Notes.TXT", 0, 42, 222);
+    CHECK(fe::saveIndex(idx, path, "/\n"));
+
+    fe::Index loaded;
+    fe::IndexFileInfo info;
+    CHECK(fe::loadIndex(loaded, path, &info));
+    CHECK(info.source == "/\n");
+    CHECK(info.createdAt > 0);
+    CHECK(loaded.size() == 3);
+    CHECK(loaded.fullPath(2) == "/Home/Notes.TXT");
+    CHECK(loaded.lowerName(2) == "notes.txt");
+    CHECK(loaded.record(2).size == 42 && loaded.record(2).mtime == 222);
+
+    // A truncated file must be rejected, not half-loaded.
+    fs::resize_file(path, fs::file_size(path) - 1);
+    CHECK(!fe::loadIndex(loaded, path));
+    CHECK(loaded.size() == 0);
+    CHECK(!fe::loadIndex(loaded, path + ".missing"));
+    fs::remove(path);
+}
+
 int main() {
     testQueryParsing();
     testFullPath();
     testSearch();
     testSearchOptions();
+    testIndexFile();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;
 }

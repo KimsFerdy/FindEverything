@@ -55,7 +55,7 @@ int main() {
 
     {
         fe::MainWindow app;
-        app.startIndexing();
+        app.start();
 
         while (!glfwWindowShouldClose(window)) {
             // Sleep until input arrives (or 100 ms passes, to refresh the indexing

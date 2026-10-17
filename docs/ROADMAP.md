@@ -33,8 +33,11 @@ Each milestone ends with something you can run.
 - [ ] Optional: install a small root helper (systemd service) so the GUI can run as a normal user
 
 ## M4: Fast startup
-- [ ] Save the index to `~/.cache/findeverything/` on exit; `mmap` it on start
-- [ ] Rescan in the background and apply the differences
+- [x] Save the index to `~/.cache/findeverything/index.bin` after each scan (atomic rename)
+- [x] Load it at startup (~0.2 s for 500k entries), then rescan in the background
+- [x] fe-cli shares the cache (`--rescan` to refresh)
+- [ ] `mmap` the file instead of reading it (zero-copy, even faster start)
+- [ ] Apply only the differences instead of swapping the whole index
 - [ ] Settings file (`~/.config/findeverything/config.toml`): roots, excludes
 
 ## M5: Other platforms

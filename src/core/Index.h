@@ -14,6 +14,8 @@ inline constexpr char kPathSeparator = '\\';
 inline constexpr char kPathSeparator = '/';
 #endif
 
+struct IndexFileInfo;
+
 // In-memory database of every file and folder.
 //
 // Layout: one flat vector of FileRecord, plus one big string ("name pool") holding
@@ -36,6 +38,11 @@ public:
     std::string fullPath(RecordId id) const;
 
 private:
+    // Serialization (core/IndexFile.cpp) reads and writes the raw arrays directly.
+    friend bool saveIndex(const Index&, const std::string&, const std::string&);
+    friend bool loadIndex(Index&, const std::string&, IndexFileInfo*);
+    void rebuildLowerNames();
+
     std::vector<FileRecord> records_;
     std::string names_;
     std::string lowerNames_;  // TODO: ASCII-only lowering; full UTF-8 case folding later

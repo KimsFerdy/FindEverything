@@ -147,7 +147,45 @@ static void testSort() {
     CHECK((sorted({zip, cat, apple}, fe::SortKey::Path) == V{apple, cat, zip}));
 }
 
+static void testLiveMutations() {
+    fe::Index idx;
+    fe::RecordId root = idx.add(fe::kNoParent, "/", fe::kIsDir, 0, 0);
+    fe::RecordId a = idx.add(root, "a", fe::kIsDir, 0, 0);
+    fe::RecordId b = idx.add(root, "b", fe::kIsDir, 0, 0);
+    fe::RecordId note = idx.add(a, "note.txt", 0, 5, 1);
+    fe::RecordId sub = idx.add(a, "sub", fe::kIsDir, 0, 0);
+    idx.add(sub, "deep.txt", 0, 1, 1);
+
+    // move a under a folder that comes later in the index + rename it
+    fe::RecordId later = idx.add(b, "later", fe::kIsDir, 0, 0);
+    idx.move(a, later, "renamed");
+    CHECK(idx.fullPath(note) == "/b/later/renamed/note.txt");
+    CHECK(fe::search(idx, fe::parseQuery("renamed")).size() == 1);
+    CHECK(fe::search(idx, fe::parseQuery("b/later/renamed/sub"), 1).size() == 0);  // no PathCache = names only
+
+    idx.setMeta(note, 0, 99, 7);
+    CHECK(idx.record(note).size == 99 && idx.record(note).mtime == 7);
+
+    // tombstones disappear from search
+    idx.markDeleted(note);
+    CHECK(fe::search(idx, fe::parseQuery("note")).empty());
+
+    // compaction: tombstones and their subtrees gone, parents first again, paths unchanged
+    idx.markDeleted(sub);
+    fe::Index c = idx.compacted();
+    CHECK(c.size() == 4);  // "/", b, later, renamed. note + sub (and deep.txt under it) are gone
+    for (fe::RecordId id = 0; id < c.size(); ++id) {
+        CHECK(c.record(id).parent == fe::kNoParent || c.record(id).parent < id);
+        CHECK(!c.isDeleted(id));
+    }
+    CHECK(fe::search(c, fe::parseQuery("deep")).empty());
+    bool foundRenamed = false;
+    for (fe::RecordId id = 0; id < c.size(); ++id) foundRenamed |= c.fullPath(id) == "/b/later/renamed";
+    CHECK(foundRenamed);
+}
+
 int main() {
+    testLiveMutations();
     testSort();
     testQueryParsing();
     testFullPath();

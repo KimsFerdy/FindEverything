@@ -24,6 +24,7 @@ struct Settings {
     bool trayIcon = true;
     bool closeToTray = true;  // closing the window keeps us running in the tray
     bool rescanOnStartup = true;
+    bool liveUpdates = true;  // inotify, keeps the index current while running
 
     std::vector<std::string> excludedVolumes;  // mount points that got unticked
     std::vector<std::string> excludedFolders;

@@ -129,8 +129,8 @@ The first configure downloads Dear ImGui, GLFW, stb and nanosvg. How it works in
 
 ## Status
 
-0.1, early but I use it every day. The index doesn't update live yet: new files show up after the startup rescan or `F5`.
-Live updates (fanotify / inotify) are next. See the [changelog](CHANGELOG.md).
+0.1 is out, 0.2 (beta, on the `dev` branch) adds live updates: the index follows your disks while the app runs.
+See the [changelog](CHANGELOG.md).
 
 ## License
 

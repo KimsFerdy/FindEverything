@@ -11,6 +11,7 @@ enum RecordFlags : uint8_t {
     kIsDir = 1 << 0,
     kIsSymlink = 1 << 1,
     kIsExecutable = 1 << 2,
+    kIsDeleted = 1 << 3,  // tombstone from live updates, dropped on the next compaction
 };
 
 // keep this small, there's millions of them in ram.

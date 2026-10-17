@@ -24,20 +24,11 @@ struct PendingDir {
 
 bool isDotOrDotDot(const char* n) { return n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0')); }
 
-}  // namespace
-
-bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progress) {
+// dfs over whatever is on the stack, appending to index.
+// explicit stack instead of recursion, deep trees won't blow the call stack
+bool walk(Index& index, std::vector<PendingDir>& stack, const ScanOptions& opts, ScanProgress* progress) {
     const std::unordered_set<std::string> excluded(opts.excludes.begin(), opts.excludes.end());
     const std::unordered_set<std::string> rootSet(opts.roots.begin(), opts.roots.end());
-
-    // explicit stack instead of recursion, deep trees won't blow the call stack
-    std::vector<PendingDir> stack;
-    for (const std::string& root : opts.roots) {
-        struct stat st {};
-        if (lstat(root.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        RecordId id = index.add(kNoParent, root, kIsDir, 0, st.st_mtime);
-        stack.push_back({root, id, st.st_dev});
-    }
 
     while (!stack.empty()) {
         if (progress && progress->cancel.load(std::memory_order_relaxed)) return false;
@@ -111,6 +102,26 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
         closedir(d);  // closes fd too
     }
     return true;
+}
+
+}  // namespace
+
+bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progress) {
+    std::vector<PendingDir> stack;
+    for (const std::string& root : opts.roots) {
+        struct stat st {};
+        if (lstat(root.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        RecordId id = index.add(kNoParent, root, kIsDir, 0, st.st_mtime);
+        stack.push_back({root, id, st.st_dev});
+    }
+    return walk(index, stack, opts, progress);
+}
+
+void scanInto(Index& index, RecordId dir, const std::string& path, const ScanOptions& opts) {
+    struct stat st {};
+    if (lstat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return;
+    std::vector<PendingDir> stack{{path, dir, st.st_dev}};
+    walk(index, stack, opts, nullptr);
 }
 
 std::vector<std::string> defaultExcludes() {

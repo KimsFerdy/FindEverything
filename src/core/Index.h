@@ -21,6 +21,16 @@ public:
 
     void reserve(size_t records, size_t nameBytes);
     void clear();
+    void shrinkToFit();  // vectors grow 2x while scanning, give the slack back
+
+    // live updates. ids stay stable, deleted records just get a tombstone
+    void markDeleted(RecordId id);
+    void move(RecordId id, RecordId newParent, std::string_view newName);  // old name stays in the pool as garbage
+    void setMeta(RecordId id, uint8_t flags, uint64_t size, int64_t mtime);
+    bool isDeleted(RecordId id) const { return records_[id].flags & kIsDeleted; }
+
+    // copy without tombstones, parents before children (what the index file and PathCache want)
+    Index compacted() const;
 
     size_t size() const { return records_.size(); }
     const FileRecord& record(RecordId id) const { return records_[id]; }

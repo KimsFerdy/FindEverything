@@ -119,7 +119,7 @@ std::vector<Tray::Icon> trayIcons() {
 }  // namespace
 
 MainWindow::MainWindow(const SystemAppearance& system, float displayScale, std::function<void()> wake)
-    : systemAppearance_(system), displayScale_(displayScale), settings_(loadSettings()), wake_(std::move(wake)) {
+    : wake_(std::move(wake)), systemAppearance_(system), displayScale_(displayScale), settings_(loadSettings()) {
     applyTheme(appearance(), displayScale_);
     updateTray();
 }
@@ -152,20 +152,28 @@ SystemAppearance MainWindow::appearance() const {
     return a;
 }
 
-MainWindow::~MainWindow() {
-    progress_.cancel = true;
-    if (scanThread_.joinable()) scanThread_.join();
+MainWindow::~MainWindow() = default;  // service_ stops + saves in its destructor
+
+void MainWindow::startIndexService(bool scanNow) {
+    service_.reset();  // old one stops first, it might still be saving
+    IndexServiceConfig config;
+    config.scan = scanOptionsFor(settings_);
+    config.source = scanSourceFor(config.scan, settings_);
+    config.cachePath = indexCachePath();
+    config.scanOnStart = scanNow;
+    config.live = settings_.liveUpdates;
+    scanStart_ = std::chrono::steady_clock::now();
+    service_ = std::make_unique<IndexService>(std::move(config), wake_);
 }
 
-void MainWindow::configureScan() {
-    scanOptions_ = scanOptionsFor(settings_);
-    scanSource_ = scanSourceFor(scanOptions_, settings_);
+void MainWindow::rescan() {
+    if (!service_ || service_->scanning()) return;
+    scanStart_ = std::chrono::steady_clock::now();
+    service_->rescan();
 }
 
 void MainWindow::start(bool background) {
-    cachePath_ = indexCachePath();
-    configureScan();
-    startIndexing(/*loadCacheFirst=*/true, /*scan=*/settings_.rescanOnStartup);
+    startIndexService(settings_.rescanOnStartup);
 
     startTime_ = std::chrono::steady_clock::now();
     if (background && tray_ && settings_.startInTray)
@@ -181,17 +189,16 @@ void MainWindow::setQuery(const std::string& text) {
 }
 
 void MainWindow::tick() {
-    {
-        std::lock_guard lock(pendingMutex_);
-        if (pending_) {
-            const bool fresh = pending_->cachedAt == 0;
-            const bool final = pending_->final;
-            cachedIndexTime_ = pending_->cachedAt;
-            adoptIndex(std::move(pending_));
-            if (final) scanning_ = false;
-            if (fresh) scanSeconds_ = msSince(scanStart_) / 1000.0;
+    if (auto snapshot = service_ ? service_->takeSnapshot() : nullptr) {
+        if (snapshot->origin == IndexSnapshot::Origin::Cache) cachedIndexTime_ = snapshot->cachedAt;
+        if (snapshot->origin == IndexSnapshot::Origin::Scan) {
+            cachedIndexTime_ = 0;
+            scanSeconds_ = msSince(scanStart_) / 1000.0;
         }
+        objectCount_ = snapshot->liveCount;
+        adoptIndex(std::move(snapshot));
     }
+    if (updates_.takeResult()) openUpdates_ = true;
 
     if (tray_) {
         for (Tray::Action action : tray_->takeActions()) {
@@ -203,7 +210,7 @@ void MainWindow::tick() {
                     windowRequest_ = WindowRequest::Show;
                     break;
                 case Tray::Action::Rescan:
-                    startIndexing();
+                    rescan();
                     break;
                 case Tray::Action::Quit:
                     quit_ = true;
@@ -222,59 +229,6 @@ void MainWindow::tick() {
             windowRequest_ = WindowRequest::Minimize;
         }
     }
-}
-
-void MainWindow::restartIndexing() {
-    if (scanThread_.joinable()) {
-        progress_.cancel = true;  // checked between directories
-        scanThread_.join();
-    }
-    scanning_ = false;
-    startIndexing();
-}
-
-void MainWindow::startIndexing(bool loadCacheFirst, bool scan) {
-    if (scanning_) return;
-    if (scanThread_.joinable()) scanThread_.join();  // previous scan, already finished
-
-    scanning_ = true;
-    progress_.entries = 0;
-    progress_.errors = 0;
-    progress_.cancel = false;
-    scanStart_ = std::chrono::steady_clock::now();
-
-    // old index stays searchable while this runs
-    scanThread_ =
-        std::thread([this, loadCacheFirst, scan, opts = scanOptions_, cachePath = cachePath_, source = scanSource_] {
-            // path cache + sort orders get built here too so the ui never stalls
-            auto publish = [this](std::unique_ptr<Index> index, int64_t cachedAt, bool final) {
-                auto snapshot = std::make_unique<IndexSnapshot>();
-                snapshot->index = std::move(index);
-                snapshot->paths.build(*snapshot->index);
-                snapshot->sorts.build(*snapshot->index, snapshot->paths);
-                snapshot->cachedAt = cachedAt;
-                snapshot->final = final;
-                std::lock_guard lock(pendingMutex_);
-                pending_ = std::move(snapshot);
-            };
-
-            // show the saved index right away, then rescan.
-            // TODO(claude): once live updates land we can skip most of these rescans
-            if (loadCacheFirst && !cachePath.empty()) {
-                auto cached = std::make_unique<Index>();
-                IndexFileInfo info;
-                if (loadIndex(*cached, cachePath, &info) && info.source == source) {
-                    publish(std::move(cached), info.createdAt, /*final=*/!scan);
-                    if (!scan) return;
-                }
-            }
-
-            auto index = std::make_unique<Index>();
-            if (!scanFilesystem(*index, opts, &progress_)) return;  // cancelled
-
-            if (!cachePath.empty()) saveIndex(*index, cachePath, source);
-            publish(std::move(index), 0, /*final=*/true);
-        });
 }
 
 void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
@@ -315,8 +269,9 @@ void MainWindow::applyPreferences(Settings next) {
         setStatus("Could not change the login startup entry");
         next.launchAtLogin = settings_.launchAtLogin;
     }
-    const bool rescan =
+    const bool indexChanged =
         next.excludedVolumes != settings_.excludedVolumes || next.excludedFolders != settings_.excludedFolders;
+    const bool liveChanged = next.liveUpdates != settings_.liveUpdates;
     const bool restyle = next.theme != settings_.theme || next.customAccent != settings_.customAccent ||
                          !std::equal(std::begin(next.accent), std::end(next.accent), std::begin(settings_.accent));
     const bool refont = restyle || next.fontZoom != settings_.fontZoom;
@@ -327,10 +282,10 @@ void MainWindow::applyPreferences(Settings next) {
     updateTray();
     if (restyle) applyTheme(appearance(), displayScale_);
     if (refont) fontsDirty_ = true;
-    if (rescan) {
-        configureScan();
-        restartIndexing();
-    }
+    if (indexChanged)
+        startIndexService(true);
+    else if (liveChanged)
+        startIndexService(false);  // the old service saved on its way out, cache is current
 }
 
 void MainWindow::runSearch() {
@@ -417,7 +372,7 @@ void MainWindow::drawMenuBar() {
         if (ImGui::MenuItem("Open", "Enter", false, hasSelection)) openSelected();
         if (ImGui::MenuItem("Open Containing Folder", "Ctrl+Enter", false, hasSelection)) revealSelected();
         ImGui::Separator();
-        if (ImGui::MenuItem("Rescan", "F5", false, !scanning_)) startIndexing();
+        if (ImGui::MenuItem("Rescan", "F5", false, service_ && !service_->scanning())) rescan();
         ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Ctrl+Q")) quit_ = true;
         ImGui::EndMenu();
@@ -464,6 +419,11 @@ void MainWindow::drawMenuBar() {
 
     if (ImGui::BeginMenu("Help")) {
         if (ImGui::MenuItem("Search Syntax", "F1")) openSyntaxHelp_ = true;
+        if (ImGui::MenuItem("Check for Updates...", nullptr, false, !updates_.running())) {
+            updates_.start();
+            setStatus("Checking for updates...");
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("About FindEverything")) openAbout_ = true;
         ImGui::EndMenu();
     }
@@ -494,7 +454,7 @@ void MainWindow::handleKeyboard() {
 
     if (ctrl && pressed(ImGuiKey_Q)) quit_ = true;
     if (pressed(ImGuiKey_F1)) openSyntaxHelp_ = true;
-    if (pressed(ImGuiKey_F5)) startIndexing();
+    if (pressed(ImGuiKey_F5)) rescan();
     if ((ctrl && pressed(ImGuiKey_F)) || pressed(ImGuiKey_Escape)) focusSearch_ = true;
 
     if (ctrl && (pressed(ImGuiKey_Equal) || pressed(ImGuiKey_KeypadAdd))) setZoom(settings_.fontZoom + 0.1f);
@@ -657,7 +617,8 @@ void MainWindow::drawRowContextMenu(RecordId id) {
 void MainWindow::drawStatusBar() {
     ImGui::PushStyleColor(ImGuiCol_Text, themeColors().dimText);
     const bool showMessage = !statusMessage_.empty() && msSince(statusTime_) < 3000;
-    const auto scanned = static_cast<unsigned long long>(progress_.entries.load());
+    const bool scanning = service_ && service_->scanning();
+    const auto scanned = static_cast<unsigned long long>(service_ ? service_->scannedEntries() : 0);
     if (showMessage) {
         ImGui::TextUnformatted(statusMessage_.c_str());
     } else if (!index_) {
@@ -665,16 +626,40 @@ void MainWindow::drawStatusBar() {
             ImGui::TextUnformatted("Loading index...");
         else
             ImGui::Text("Indexing...  %llu objects", scanned);
-    } else if (scanning_) {
+    } else if (scanning) {
         std::string age = cachedIndexTime_ ? "index from " + formatAge(cachedIndexTime_) + ", updating" : "rescanning";
-        ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", index_->size(), results_.size(), age.c_str(),
+        ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", objectCount_, results_.size(), age.c_str(),
                     scanned);
     } else if (cachedIndexTime_) {
-        ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   index from %s (F5 to rescan)",
-                    index_->size(), results_.size(), searchMs_, formatAge(cachedIndexTime_).c_str());
+        ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   index from %s", objectCount_,
+                    results_.size(), searchMs_, formatAge(cachedIndexTime_).c_str());
     } else {
-        ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   indexed in %.1f s", index_->size(),
+        ImGui::Text("%zu objects   ·   %zu results   ·   search %.1f ms   ·   indexed in %.1f s", objectCount_,
                     results_.size(), searchMs_, scanSeconds_);
+    }
+
+    // live updates state, right aligned
+    if (index_ && service_ && !scanning) {
+        const size_t watched = service_->watchedDirs(), missed = service_->unwatchedForLimit();
+        const size_t total = watched + missed;
+        char live[96];
+        if (!settings_.liveUpdates)
+            std::snprintf(live, sizeof live, "live updates off");
+        else if (watched == 0)
+            std::snprintf(live, sizeof live, "live updates unavailable");
+        else if (watched < total)
+            std::snprintf(live, sizeof live, "live  ·  %zu of %zu folders", watched, total);
+        else
+            std::snprintf(live, sizeof live, "live");
+        ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(live).x - ImGui::GetStyle().WindowPadding.x);
+        ImGui::TextUnformatted(live);
+        if (ImGui::IsItemHovered() && watched < total && settings_.liveUpdates) {
+            ImGui::SetTooltip(
+                "Only %zu of %zu folders are watched (inotify limit).\n"
+                "Raise it with:\n  echo fs.inotify.max_user_watches=524288 | "
+                "sudo tee /etc/sysctl.d/60-inotify.conf && sudo sysctl --system",
+                watched, total);
+        }
     }
     ImGui::PopStyleColor();
 }
@@ -683,7 +668,8 @@ void MainWindow::drawHelpPopups() {
     // opened here and not in the menu, popup ids are per window and the menu is its own window
     if (openSyntaxHelp_) ImGui::OpenPopup("Search Syntax");
     if (openAbout_) ImGui::OpenPopup("About FindEverything");
-    openSyntaxHelp_ = openAbout_ = false;
+    if (openUpdates_) ImGui::OpenPopup("Check for Updates");
+    openSyntaxHelp_ = openAbout_ = openUpdates_ = false;
 
     const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
 
@@ -719,8 +705,45 @@ void MainWindow::drawHelpPopups() {
     if (ImGui::BeginPopupModal("About FindEverything", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("FindEverything %s", FE_VERSION);
         ImGui::TextColored(themeColors().dimText, "Instant file search, inspired by Everything by voidtools.");
-        ImGui::TextColored(themeColors().dimText, "Built with Dear ImGui %s and GLFW.", IMGUI_VERSION);
+        ImGui::TextColored(themeColors().dimText, "Built with Dear ImGui %s and GLFW. MIT licensed.", IMGUI_VERSION);
         ImGui::Spacing();
+        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Check for Updates", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        using Status = UpdateChecker::Result::Status;
+        const UpdateChecker::Result r = updates_.result();
+        switch (r.status) {
+            case Status::UpdateAvailable:
+                ImGui::Text("FindEverything %s is out.", r.latest.c_str());
+                ImGui::TextColored(themeColors().dimText, "You have %s.", r.current.c_str());
+                break;
+            case Status::UpToDate:
+                ImGui::Text("You're up to date.");
+                ImGui::TextColored(themeColors().dimText, "%s is the latest release.", r.current.c_str());
+                break;
+            case Status::AheadOfRelease:
+                ImGui::Text("You're ahead of the latest release.");
+                ImGui::TextColored(themeColors().dimText, "Running %s, latest release is %s.", r.current.c_str(),
+                                   r.latest.c_str());
+                break;
+            case Status::Failed:
+                ImGui::Text("Couldn't reach GitHub.");
+                ImGui::TextColored(themeColors().dimText, "Check your connection, or look on the releases page.");
+                break;
+        }
+        ImGui::Spacing();
+        const ImVec2 button(ImGui::GetFontSize() * 9, 0);
+        if (ImGui::Button(r.status == Status::UpdateAvailable ? "Get the Update" : "Releases Page", button)) {
+            openPath(r.url);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             ImGui::CloseCurrentPopup();

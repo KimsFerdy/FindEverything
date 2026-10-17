@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-beta (unreleased)
+
+### Live updates
+- the index follows the disk while the app runs (inotify): new, renamed, moved and deleted files and
+  whole folder trees show up within ~0.3 s, no rescan needed
+- watches every folder within half the per-user inotify limit, home first; the status bar says when the limit
+  is hit and how to raise it
+- tombstones + compaction, changes are saved every minute and on quit
+- Preferences > Indexes: "Keep the index up to date while running"
+
+### Other
+- Help > Check for Updates (asks GitHub, only when you click it)
+- lower memory use after scans (~110 MB less)
+
 ## 0.1.0 — 2026-10-17
 
 First release.

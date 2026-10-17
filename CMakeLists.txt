@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
-project(FindEverything VERSION 0.1.0 LANGUAGES C CXX)
+project(FindEverything VERSION 0.2.0 LANGUAGES C CXX)
+set(FE_VERSION_SUFFIX "-beta")  # "" for a release
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "FindEverything is Linux only")
@@ -40,6 +41,7 @@ add_library(fe_platform STATIC
     src/platform/Autostart.cpp
     src/platform/FileIcons.cpp
     src/platform/IconTheme.cpp
+    src/platform/Inotify.cpp
     src/platform/MimeDatabase.cpp
     src/platform/Mounts.cpp
     src/platform/Paths.cpp
@@ -48,7 +50,6 @@ add_library(fe_platform STATIC
     src/platform/Shell.cpp
     src/platform/Tray.cpp
     src/platform/Volumes.cpp
-    src/platform/Watcher.cpp
 )
 target_link_libraries(fe_platform PUBLIC fe_core PkgConfig::SYSTEMD)
 fe_warnings(fe_platform)
@@ -67,9 +68,11 @@ if(FE_BUILD_GUI)
         src/app/Settings.cpp
         src/app/PreferencesDialog.cpp
         src/app/IconCache.cpp
+        src/app/IndexService.cpp
+        src/app/UpdateChecker.cpp
     )
     target_link_libraries(FindEverything PRIVATE fe_platform imgui image_decoders)
-    target_compile_definitions(FindEverything PRIVATE FE_VERSION="${PROJECT_VERSION}")
+    target_compile_definitions(FindEverything PRIVATE FE_VERSION="${PROJECT_VERSION}${FE_VERSION_SUFFIX}")
     target_include_directories(FindEverything PRIVATE ${CMAKE_BINARY_DIR}/generated)
     fe_warnings(FindEverything)
 

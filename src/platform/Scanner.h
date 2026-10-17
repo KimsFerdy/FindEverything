@@ -28,6 +28,9 @@ struct ScanProgress {
 // false if cancelled
 bool scanFilesystem(Index& index, const ScanOptions& options, ScanProgress* progress = nullptr);
 
+// scan the contents of an already indexed folder (live updates: a whole tree showed up at once)
+void scanInto(Index& index, RecordId dir, const std::string& path, const ScanOptions& options);
+
 // /proc, /sys, /dev and every other virtual fs mount
 std::vector<std::string> defaultExcludes();
 

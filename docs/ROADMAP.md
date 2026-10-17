@@ -15,12 +15,13 @@
 - [x] app icon, .desktop file, `cmake --install`
 - [x] .deb / AppImage / .tar.gz (`scripts/package.sh`)
 
-## Next: live updates
-- [ ] index supports delete / rename (tombstones + compaction)
-- [ ] path → record lookup so events can find their entry
-- [ ] fanotify watcher (`FAN_MARK_FILESYSTEM` + `FAN_REPORT_DFID_NAME`, needs `CAP_SYS_ADMIN`)
-- [ ] inotify fallback when running unprivileged
-- [ ] maybe a small root helper service so the gui can stay a normal user
+## 0.2 beta
+- [x] live updates with inotify: create / delete / rename / move incl. whole trees, tombstones + compaction
+- [x] snapshots built off-thread, saved every minute and on quit
+- [x] help > check for updates
+- [ ] incremental sort orders (today every live change rebuilds them, ~0.5 s of cpu on 500k files)
+- [ ] fanotify when running as root / with a helper (`FAN_MARK_FILESYSTEM`, no per-folder watches)
+- [ ] notice changes made while the app wasn't running without a full rescan (compare dir mtimes)
 
 ## Later
 - [ ] persist sort orders in the cache (skip the ~0.5 s rebuild on startup)

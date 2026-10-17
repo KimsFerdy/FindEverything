@@ -62,6 +62,8 @@ Settings loadSettings() {
 
         if (key == "rescan_on_startup")
             s.rescanOnStartup = parseBool(value);
+        else if (key == "live_updates")
+            s.liveUpdates = parseBool(value);
         else if (key == "start_in_tray")
             s.startInTray = parseBool(value);
         else if (key == "tray_icon")
@@ -102,6 +104,7 @@ bool saveSettings(const Settings& s) {
         out << "# FindEverything settings. fine to edit while the app is closed\n\n"
             << "[general]\n"
             << "rescan_on_startup = " << (s.rescanOnStartup ? "true" : "false") << "\n"
+            << "live_updates = " << (s.liveUpdates ? "true" : "false") << "\n"
             << "start_in_tray = " << (s.startInTray ? "true" : "false") << "\n"
             << "tray_icon = " << (s.trayIcon ? "true" : "false") << "\n"
             << "close_to_tray = " << (s.closeToTray ? "true" : "false") << "\n\n"

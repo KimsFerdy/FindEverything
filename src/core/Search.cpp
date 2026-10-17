@@ -33,6 +33,7 @@ public:
 
     bool operator()(RecordId id) {
         const FileRecord& r = index_.record(id);
+        if (r.flags & kIsDeleted) return false;
         const bool isDir = r.flags & kIsDir;
         if (q_.filesOnly && isDir) return false;
         if (q_.foldersOnly && !isDir) return false;

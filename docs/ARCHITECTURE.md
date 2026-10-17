@@ -27,8 +27,9 @@ Same tricks as Everything:
 
 | thread       | does                                                                 |
 |--------------|----------------------------------------------------------------------|
-| ui           | owns the current index, draws, searches                              |
-| scan         | loads the cache / scans / saves, builds paths + sort orders, hands over an `IndexSnapshot` |
+| ui           | owns a read-only snapshot, draws, searches                           |
+| index worker | `IndexService`: loads the cache, scans, owns the real index, applies inotify events, saves |
+| builder      | turns copies of the real index into `IndexSnapshot`s (path cache + sort orders), newest wins |
 | search pool  | short lived, one slice of the index each                             |
 
 ## Scanning
@@ -36,6 +37,21 @@ Same tricks as Everything:
 `open(O_DIRECTORY)` + `readdir` + `fstatat`, iterative DFS. Every real mount from
 `/proc/self/mountinfo` is its own root, and the scanner stops when `st_dev` changes so disks
 don't get walked twice. Virtual filesystems (`/proc`, `/sys`, tmpfs, snaps...) are skipped.
+
+## Live updates
+
+`IndexService` puts an inotify watch on every indexed folder (home first, at most half of
+`max_user_watches` since every app of the user shares it). Events map back to records through
+watch descriptor → folder record and a children table (csr + a small overflow map for new entries).
+
+- create: stat + append; a new folder gets a watch first, then its contents get scanned (`scanInto`)
+- delete: tombstone the record and its subtree
+- rename / move: `IN_MOVED_FROM` + `IN_MOVED_TO` with the same cookie → change parent + name in place,
+  so subtrees and their watches just follow. a lone `MOVED_FROM` (moved somewhere unwatched) becomes a delete
+- queue overflow: full rescan
+
+Changes get published ~300 ms after things go quiet (2 s max during a storm). Saving compacts first:
+drops tombstones and puts parents before children again, which the index file requires.
 
 ## Icons
 

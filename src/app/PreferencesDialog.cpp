@@ -106,6 +106,14 @@ void PreferencesDialog::drawGeneralTab() {
 
 void PreferencesDialog::drawIndexesTab() {
     ImGui::Spacing();
+    ImGui::Checkbox("Keep the index up to date while running", &draft_.liveUpdates);
+    ImGui::Indent();
+    hint(
+        "New, renamed and deleted files show up within a second (inotify). "
+        "Turn off to only update on rescan.");
+    ImGui::Unindent();
+
+    ImGui::Spacing();
     ImGui::TextUnformatted("Disks to index");
     hint("Each disk is scanned on its own. Changes start a rescan when you press OK.");
 

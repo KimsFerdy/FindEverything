@@ -1,14 +1,11 @@
-// XDG Autostart: at login, the desktop session (Cinnamon, GNOME, KDE...) runs
-// every *.desktop file in ~/.config/autostart. You can see and toggle these in
-// Mint's "Startup Applications" too; ours will show up there.
-
 #include "platform/Autostart.h"
-#include "platform/Paths.h"
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+
+#include "platform/Paths.h"
 
 namespace fe {
 
@@ -23,7 +20,7 @@ fs::path desktopFile() {
     return base.empty() ? fs::path() : base / "autostart" / "findeverything.desktop";
 }
 
-// Desktop-entry Exec values need spaces, quotes and backslashes quoted.
+// desktop entry Exec= quoting rules
 std::string quoteExec(const std::string& path) {
     std::string out = "\"";
     for (char c : path) {
@@ -58,6 +55,7 @@ bool setLaunchAtLogin(bool enable) {
            "Type=Application\n"
            "Name=FindEverything\n"
            "Comment=Instant file search\n"
+           "Icon=findeverything\n"
            "Exec="
         << quoteExec(exe)
         << " --minimized\n"

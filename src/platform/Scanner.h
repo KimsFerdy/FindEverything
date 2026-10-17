@@ -1,36 +1,34 @@
 #pragma once
 
-#include "core/Index.h"
-
 #include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "core/Index.h"
+
 namespace fe {
 
 struct ScanOptions {
-    std::vector<std::string> roots;     // where to start, e.g. {"/", "/home"}
-    std::vector<std::string> excludes;  // absolute directory paths to leave out entirely
-    bool collectMetadata = true;        // size + mtime; costs one stat() per entry
-    // Don't descend into other filesystems mounted below a root (each disk is
-    // its own root instead). Mount points that are themselves roots are skipped
-    // so they don't appear twice.
+    std::vector<std::string> roots;     // e.g. {"/", "/home"}
+    std::vector<std::string> excludes;  // dirs left out completely
+    bool collectMetadata = true;        // size + mtime, costs a stat() per entry
+    // don't walk into other mounts under a root. mounts that are roots themselves get
+    // skipped too so they don't show up twice
     bool stayOnFilesystem = false;
 };
 
-// Shared between the scanning thread and the UI thread, hence atomics.
+// shared with the ui thread
 struct ScanProgress {
     std::atomic<uint64_t> entries{0};
-    std::atomic<uint64_t> errors{0};  // usually "permission denied"
+    std::atomic<uint64_t> errors{0};  // mostly permission denied
     std::atomic<bool> cancel{false};
 };
 
-// Implemented once per OS (see CMakeLists.txt for which file is compiled).
-// Returns false if cancelled.
+// false if cancelled
 bool scanFilesystem(Index& index, const ScanOptions& options, ScanProgress* progress = nullptr);
 
-std::vector<std::string> defaultRoots();
+// /proc, /sys, /dev and every other virtual fs mount
 std::vector<std::string> defaultExcludes();
 
 }  // namespace fe

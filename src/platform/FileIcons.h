@@ -1,28 +1,28 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <string_view>
 
+#include "platform/IconTheme.h"
+#include "platform/MimeDatabase.h"
+
 namespace fe {
 
-// Finds the image the desktop uses for a file type, so results look like they
-// do in the file manager.
+// file -> icon file from the desktop's icon theme, so rows look like they do in nemo
 class FileIcons {
 public:
-    virtual ~FileIcons() = default;
+    explicit FileIcons(const std::string& iconTheme);
 
-    // Cheap; called for every visible row. Identifies the icon for a file
-    // (on Linux: its MIME type, e.g. "image/png"). Equal keys = same icon.
-    virtual std::string iconKey(std::string_view fileName, uint8_t recordFlags, bool isRoot) const = 0;
+    // cheap, called per visible row. it's the mime type ("image/png"), same key = same icon
+    std::string iconKey(std::string_view fileName, uint8_t recordFlags, bool isRoot) const;
 
-    // Expensive; called once per key. Path to a .png or .svg close to sizePx, or "".
-    virtual std::string iconFile(const std::string& key, int sizePx) const = 0;
+    // slow-ish (~1ms), once per key. path to a png/svg near sizePx or ""
+    std::string iconFile(const std::string& key, int sizePx) const;
+
+private:
+    MimeDatabase mime_;
+    IconTheme theme_;
 };
-
-// themeHint: the desktop's icon theme name ("Mint-Y-Aqua"); may be empty.
-// Returns nullptr where not supported yet (callers draw built-in icons).
-std::unique_ptr<FileIcons> createFileIcons(const std::string& themeHint);
 
 }  // namespace fe

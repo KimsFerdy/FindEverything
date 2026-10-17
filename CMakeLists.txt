@@ -1,27 +1,27 @@
 cmake_minimum_required(VERSION 3.21)
 project(FindEverything VERSION 0.1.0 LANGUAGES C CXX)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "FindEverything is Linux only")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # lets clangd / VS Code understand the project
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(FE_BUILD_GUI   "Build the ImGui desktop app" ON)
-option(FE_BUILD_TESTS "Build unit tests"            ON)
+option(FE_BUILD_GUI   "Build the GUI"   ON)
+option(FE_BUILD_TESTS "Build the tests" ON)
 
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)  # sd-bus for the tray icon
 
 function(fe_warnings target)
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /W4)
-    else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
 endfunction()
 
-# ---------------------------------------------------------------------------
-# core: platform-independent index + query + search. No OS headers allowed here.
-# ---------------------------------------------------------------------------
+# core: index, search, sort, on-disk format. no os stuff in here
 add_library(fe_core STATIC
     src/core/Index.cpp
     src/core/IndexFile.cpp
@@ -34,55 +34,32 @@ target_include_directories(fe_core PUBLIC src)
 target_link_libraries(fe_core PUBLIC Threads::Threads)
 fe_warnings(fe_core)
 
-# ---------------------------------------------------------------------------
-# platform: how we read the filesystem on each OS.
-# ---------------------------------------------------------------------------
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(FE_PLATFORM_SOURCES
-        src/platform/linux/LinuxScanner.cpp
-        src/platform/linux/LinuxMounts.cpp
-        src/platform/linux/LinuxWatcher.cpp
-        src/platform/linux/LinuxShell.cpp
-        src/platform/linux/LinuxAppearance.cpp
-        src/platform/linux/Process.cpp
-        src/platform/linux/LinuxVolumes.cpp
-        src/platform/linux/LinuxAutostart.cpp
-        src/platform/linux/MimeDatabase.cpp
-        src/platform/linux/IconTheme.cpp
-        src/platform/linux/LinuxFileIcons.cpp
-    )
-else()
-    # Windows / macOS use the portable std::filesystem scanner until native
-    # backends (NTFS MFT + USN journal, FSEvents) are written. See docs/ROADMAP.md.
-    set(FE_PLATFORM_SOURCES
-        src/platform/generic/GenericScanner.cpp
-        src/platform/generic/GenericWatcher.cpp
-        src/platform/generic/GenericShell.cpp
-        src/platform/generic/GenericAppearance.cpp
-        src/platform/generic/GenericVolumes.cpp
-        src/platform/generic/GenericAutostart.cpp
-        src/platform/generic/GenericFileIcons.cpp
-    )
-endif()
-add_library(fe_platform STATIC ${FE_PLATFORM_SOURCES} src/platform/Paths.cpp)
-target_link_libraries(fe_platform PUBLIC fe_core)
-if(WIN32)
-    target_link_libraries(fe_platform PUBLIC shell32 advapi32)
-endif()
+# platform: scanning, mounts, xdg, desktop integration
+add_library(fe_platform STATIC
+    src/platform/Appearance.cpp
+    src/platform/Autostart.cpp
+    src/platform/FileIcons.cpp
+    src/platform/IconTheme.cpp
+    src/platform/MimeDatabase.cpp
+    src/platform/Mounts.cpp
+    src/platform/Paths.cpp
+    src/platform/Process.cpp
+    src/platform/Scanner.cpp
+    src/platform/Shell.cpp
+    src/platform/Tray.cpp
+    src/platform/Volumes.cpp
+    src/platform/Watcher.cpp
+)
+target_link_libraries(fe_platform PUBLIC fe_core PkgConfig::SYSTEMD)
 fe_warnings(fe_platform)
 
-# ---------------------------------------------------------------------------
-# fe-cli: terminal front-end, handy for testing and benchmarking.
-# ---------------------------------------------------------------------------
 add_executable(fe-cli src/cli/main.cpp src/app/Settings.cpp)
 target_link_libraries(fe-cli PRIVATE fe_platform)
 fe_warnings(fe-cli)
 
-# ---------------------------------------------------------------------------
-# FindEverything: the GUI.
-# ---------------------------------------------------------------------------
 if(FE_BUILD_GUI)
     include(cmake/Dependencies.cmake)
+    include(cmake/EmbedIcon.cmake)
     add_executable(FindEverything
         src/app/main.cpp
         src/app/MainWindow.cpp
@@ -93,7 +70,27 @@ if(FE_BUILD_GUI)
     )
     target_link_libraries(FindEverything PRIVATE fe_platform imgui image_decoders)
     target_compile_definitions(FindEverything PRIVATE FE_VERSION="${PROJECT_VERSION}")
+    target_include_directories(FindEverything PRIVATE ${CMAKE_BINARY_DIR}/generated)
     fe_warnings(FindEverything)
+
+    # cmake --install build/release --prefix ~/.local  -> shows up in the app menu
+    include(GNUInstallDirs)
+    install(TARGETS FindEverything fe-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES data/findeverything.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES assets/findeverything.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+
+    # cpack -G DEB  (scripts/package.sh builds everything for a release)
+    set(CPACK_PACKAGE_NAME "findeverything")
+    set(CPACK_PACKAGE_VENDOR "KimsFerdy")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Instant file search for Linux, inspired by Everything")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/KimsFerdy/FindEverything")
+    set(CPACK_PACKAGE_CONTACT "KimsFerdy <102543259+KimsFerdy@users.noreply.github.com>")
+    set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_SOURCE_DIR}/LICENSE)
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)  # dpkg-shlibdeps figures out the depends line
+    include(CPack)
 endif()
 
 if(FE_BUILD_TESTS)

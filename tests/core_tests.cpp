@@ -1,4 +1,7 @@
-// Minimal dependency-free tests. Swap in Catch2 or GoogleTest once this grows.
+// no framework yet, CHECK + exit code is enough for now
+
+#include <cstdio>
+#include <filesystem>
 
 #include "core/Index.h"
 #include "core/IndexFile.h"
@@ -6,17 +9,14 @@
 #include "core/Search.h"
 #include "core/Sort.h"
 
-#include <cstdio>
-#include <filesystem>
-
 static int g_failures = 0;
 
-#define CHECK(expr)                                                         \
-    do {                                                                    \
-        if (!(expr)) {                                                      \
+#define CHECK(expr)                                                                       \
+    do {                                                                                  \
+        if (!(expr)) {                                                                    \
             std::fprintf(stderr, "%s:%d: CHECK(%s) failed\n", __FILE__, __LINE__, #expr); \
-            ++g_failures;                                                   \
-        }                                                                   \
+            ++g_failures;                                                                 \
+        }                                                                                 \
     } while (0)
 
 static void testQueryParsing() {
@@ -54,7 +54,7 @@ static void testSearch() {
     CHECK(fe::search(idx, fe::parseQuery("ext:jpg")).size() == 2);
     CHECK(fe::search(idx, fe::parseQuery("folder:")).size() == 2);  // "/" and Photos
     CHECK(fe::search(idx, fe::parseQuery("")).size() == idx.size());
-    // Multi-threaded path must give identical results.
+    // threaded and single threaded have to agree
     CHECK(fe::search(idx, fe::parseQuery("beach"), 4) == fe::search(idx, fe::parseQuery("beach"), 1));
 }
 
@@ -85,10 +85,10 @@ static void testSearchOptions() {
 
     CHECK(count("index") == 3);
     CHECK(count("Index", matchCase) == 1);
-    CHECK(count("index", wholeWord) == 2);    // "Index.cpp", "index_test.cpp" (not "reindexer")
-    CHECK(count("core cpp") == 0);            // names only
+    CHECK(count("index", wholeWord) == 2);  // "Index.cpp", "index_test.cpp" (not "reindexer")
+    CHECK(count("core cpp") == 0);          // names only
     CHECK(count("core cpp", matchPath) == 2);
-    CHECK(count("src/core") == 3);            // '/' turns on path matching: Core + its 2 files
+    CHECK(count("src/core") == 3);  // '/' turns on path matching: Core + its 2 files
     CHECK(count("src", filesOnly) == 0);
 }
 
@@ -112,7 +112,7 @@ static void testIndexFile() {
     CHECK(loaded.lowerName(2) == "notes.txt");
     CHECK(loaded.record(2).size == 42 && loaded.record(2).mtime == 222);
 
-    // A truncated file must be rejected, not half-loaded.
+    // truncated file has to be rejected, not half loaded
     fs::resize_file(path, fs::file_size(path) - 1);
     CHECK(!fe::loadIndex(loaded, path));
     CHECK(loaded.size() == 0);
@@ -137,13 +137,13 @@ static void testSort() {
     auto sorted = [&](const V& r, fe::SortKey key, bool desc = false) {
         return fe::sortResults(r, idx.size(), sorts, key, desc);
     };
-    // Name: folders first, then case-insensitive A..Z.
+    // folders first, then a..z ignoring case
     CHECK((sorted(all, fe::SortKey::Name) == V{root, b, zip, apple, cat}));
     CHECK((sorted({cat, apple}, fe::SortKey::Name) == V{apple, cat}));
     CHECK((sorted({cat, apple}, fe::SortKey::Name, true) == V{cat, apple}));
     CHECK((sorted({zip, apple, cat}, fe::SortKey::Size, true) == V{zip, cat, apple}));
     CHECK((sorted({zip, apple, cat}, fe::SortKey::Modified) == V{zip, cat, apple}));
-    // Path: "/" (apple, cat) before "/b" (zip).
+    // "/" (apple, cat) before "/b" (zip)
     CHECK((sorted({zip, cat, apple}, fe::SortKey::Path) == V{apple, cat, zip}));
 }
 

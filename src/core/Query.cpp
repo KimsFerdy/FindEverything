@@ -12,7 +12,7 @@ std::string toLower(std::string_view s) {
     return out;
 }
 
-// Splits on whitespace; double quotes group words and are removed.
+// split on whitespace, quotes group stuff together and get dropped
 std::vector<std::string> tokenize(std::string_view text) {
     std::vector<std::string> tokens;
     std::string cur;
@@ -67,7 +67,7 @@ Query parseQuery(std::string_view text, const SearchOptions& options) {
         } else if (lower == "folder:") {
             q.foldersOnly = true;
         } else {
-            if (tok.find_first_of("/\\") != std::string_view::npos) q.matchPath = true;
+            if (tok.find('/') != std::string_view::npos) q.matchPath = true;
             (negate ? q.exclude : q.include).push_back(q.matchCase ? std::string(tok) : std::move(lower));
         }
     }

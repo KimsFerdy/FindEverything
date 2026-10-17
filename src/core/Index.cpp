@@ -4,9 +4,7 @@ namespace fe {
 
 namespace {
 
-char asciiLower(char c) {
-    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
-}
+char asciiLower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
 
 }  // namespace
 
@@ -61,8 +59,7 @@ std::string Index::fullPath(RecordId id) const {
 
     std::string out;
     for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
-        // Roots like "/" or "C:\" already end in a separator.
-        if (!out.empty() && out.back() != '/' && out.back() != '\\') out += kPathSeparator;
+        if (!out.empty() && out.back() != kPathSeparator) out += kPathSeparator;  // "/" already ends in one
         out += *it;
     }
     return out;

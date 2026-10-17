@@ -1,21 +1,19 @@
 #pragma once
 
-#include "core/Index.h"
-
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/Index.h"
+
 namespace fe {
 
-// Full paths of every *folder*, built once after indexing. Path searches need the
-// full path of every record; rebuilding it by walking parents each time would be
-// far too slow, but folders are only ~10% of entries, so caching just those is cheap.
-// A file's path is then dirPath(parent) + '/' + name.
+// full path of every folder, built once per index.
+// path search needs everyone's full path and walking parents for 500k records is way too slow.
+// folders are ~10% of entries so caching only those is cheap. file path = dirPath(parent) + '/' + name
 class PathCache {
 public:
-    // Requires every folder to appear in the index before its children
-    // (true for our scanners, which add a folder before reading it).
+    // needs folders to come before their children in the index (our scanner does that)
     void build(const Index& index);
 
     std::string_view dirPath(RecordId dir) const { return view(paths_, dir); }
@@ -28,7 +26,7 @@ private:
     };
     std::string_view view(const std::string& pool, RecordId dir) const;
 
-    std::vector<uint32_t> slot_;  // per record: index into spans_, or kNoSlot for files
+    std::vector<uint32_t> slot_;  // per record, index into spans_ (or none for files)
     std::vector<Span> spans_;
     std::string paths_;
     std::string lowerPaths_;

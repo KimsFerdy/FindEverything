@@ -1,5 +1,13 @@
 #pragma once
 
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
 #include "app/IconCache.h"
 #include "app/PreferencesDialog.h"
 #include "app/Settings.h"
@@ -9,51 +17,51 @@
 #include "core/Sort.h"
 #include "platform/Appearance.h"
 #include "platform/Scanner.h"
-
-#include <chrono>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <vector>
+#include "platform/Tray.h"
 
 namespace fe {
 
-// One complete version of the index plus everything derived from it. Built
-// entirely on the background thread, then handed to the UI in one move.
+// one full version of the index + everything derived from it.
+// built on the scan thread, handed to the ui in one move
 struct IndexSnapshot {
     std::unique_ptr<Index> index;
     PathCache paths;
     SortOrders sorts;
-    int64_t cachedAt = 0;  // >0: loaded from the cache file (unix time); 0: fresh scan
-    bool final = false;    // no further snapshot follows (scan finished, or no scan)
+    int64_t cachedAt = 0;  // > 0: came from the cache file
+    bool final = false;    // nothing else coming after this one
 };
 
-// The whole UI: menu bar, search box, results table, status bar.
-// Indexing runs on a background thread; the finished Index is handed over to the
-// UI thread through pending_ (guarded by pendingMutex_).
 class MainWindow {
 public:
-    // `system` = what the desktop asked for; `displayScale` = monitor content scale.
-    MainWindow(const SystemAppearance& system, float displayScale);
+    // wake: thread safe, pokes the main loop (glfwPostEmptyEvent)
+    MainWindow(const SystemAppearance& system, float displayScale, std::function<void()> wake);
     ~MainWindow();
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;
 
-    // Loads the cached index (instant results), then rescans in the background.
-    void start();
+    // loads the cached index, then rescans in the background.
+    // background = launched at login (tray or minimized instead of popping up)
+    void start(bool background);
     void startIndexing(bool loadCacheFirst = false, bool scan = true);
-    void draw();  // call once per frame between ImGui::NewFrame() and ImGui::Render()
+    void setQuery(const std::string& text);  // --search, like Everything's -search
+    void tick();                             // every loop iteration, even while the window is hidden
+    void draw();                             // only while visible
 
-    // Requests the main loop acts on (they involve GLFW / the font texture).
+    // stuff main() has to do (glfw / font texture)
+    enum class WindowRequest { None, Show, Hide, Toggle, Minimize };
+    WindowRequest takeWindowRequest();
+    bool hideOnClose() const;
     bool quitRequested() const { return quit_; }
-    bool consumeFontRebuild();  // true once after zoom/theme changes needing new fonts
+    bool consumeFontRebuild();
+    const WindowGeometry& windowGeometry() const { return settings_.window; }
+    void rememberWindowGeometry(const WindowGeometry& geometry);
 
-    // The look after applying user settings on top of the system appearance.
+    // system look + user overrides
     SystemAppearance appearance() const;
     float fontScale() const { return displayScale_ * settings_.fontZoom; }
 
 private:
+    void updateTray();
     void configureScan();
     void restartIndexing();
     void applyPreferences(Settings next);
@@ -74,7 +82,7 @@ private:
     void setZoom(float zoom);
     void setStatus(std::string message);
 
-    // --- index (UI thread owns index_/paths_/sorts_; scanner thread fills pending_)
+    // index_/paths_/sorts_ belong to the ui thread, the scan thread only touches pending_
     std::unique_ptr<Index> index_;
     PathCache paths_;
     SortOrders sorts_;
@@ -85,42 +93,44 @@ private:
     bool scanning_ = false;
     std::chrono::steady_clock::time_point scanStart_;
     double scanSeconds_ = 0;
-    std::string cachePath_;        // ~/.cache/findeverything/index.bin ("" = no caching)
-    ScanOptions scanOptions_;      // from settings: which disks, which exclusions
-    std::string scanSource_;       // describes scanOptions_; stored in the cache to detect changes
-    int64_t cachedIndexTime_ = 0;  // unix time of the loaded cache, 0 = fresh scan
+    std::string cachePath_;
+    ScanOptions scanOptions_;
+    std::string scanSource_;
+    int64_t cachedIndexTime_ = 0;
 
-    // --- search
     char queryBuf_[512] = {};
     SearchOptions searchOptions_;
     bool focusSearch_ = true;
-    std::vector<RecordId> results_;  // matches, in display (sorted) order
+    std::vector<RecordId> results_;  // already sorted
     double searchMs_ = 0;
     SortKey sortKey_ = SortKey::Name;
     bool sortDescending_ = false;
 
-    int selectedRow_ = -1;  // index into results_
+    int selectedRow_ = -1;  // into results_
     bool scrollToSelected_ = false;
 
-    // --- view
     enum Column { kName, kPath, kSize, kModified, kColumnCount };
     bool columnVisible_[kColumnCount] = {true, true, true, true};
-    bool columnsChanged_ = false;  // menu changed visibility; push it into the table
+    bool columnsChanged_ = false;
     bool showStatusBar_ = true;
     bool fontsDirty_ = false;
 
-    // --- settings
     SystemAppearance systemAppearance_;
     float displayScale_ = 1.0f;
     Settings settings_;
     PreferencesDialog preferences_;
-    std::unique_ptr<IconCache> icons_;  // recreated when the row height changes (zoom)
+    std::unique_ptr<IconCache> icons_;  // recreated when the row height changes
+    std::unique_ptr<Tray> tray_;
+    std::function<void()> wake_;
+    WindowRequest windowRequest_ = WindowRequest::None;
+    bool waitingForTray_ = false;  // started hidden, tray not up yet
+    std::chrono::steady_clock::time_point startTime_;
 
     bool openSyntaxHelp_ = false;
     bool openAbout_ = false;
     bool quit_ = false;
 
-    std::string statusMessage_;  // transient, e.g. "Copied path"
+    std::string statusMessage_;
     std::chrono::steady_clock::time_point statusTime_;
 };
 

@@ -1,4 +1,4 @@
-#include "platform/linux/MimeDatabase.h"
+#include "platform/MimeDatabase.h"
 
 #include <fnmatch.h>
 
@@ -7,7 +7,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace fe::linux_fs {
+namespace fe {
 
 namespace {
 
@@ -17,7 +17,6 @@ std::string toLower(std::string_view s) {
     return out;
 }
 
-// "a:b:c" -> {"a", "b", "c"}
 std::vector<std::string> split(const std::string& s, char sep) {
     std::vector<std::string> parts;
     std::stringstream ss(s);
@@ -25,7 +24,7 @@ std::vector<std::string> split(const std::string& s, char sep) {
     return parts;
 }
 
-// Reads "key:value" files (mime/icons, mime/generic-icons). First entry wins.
+// "key:value" files (mime/icons, mime/generic-icons), first one wins
 void loadPairs(const std::string& path, std::unordered_map<std::string, std::string>& out) {
     std::ifstream in(path);
     for (std::string line; std::getline(in, line);) {
@@ -41,8 +40,10 @@ std::vector<std::string> xdgDataDirs() {
     std::vector<std::string> dirs;
     const char* home = std::getenv("HOME");
     const char* dataHome = std::getenv("XDG_DATA_HOME");
-    if (dataHome && *dataHome) dirs.push_back(dataHome);
-    else if (home) dirs.push_back(std::string(home) + "/.local/share");
+    if (dataHome && *dataHome)
+        dirs.push_back(dataHome);
+    else if (home)
+        dirs.push_back(std::string(home) + "/.local/share");
 
     const char* dataDirs = std::getenv("XDG_DATA_DIRS");
     for (const std::string& d : split((dataDirs && *dataDirs) ? dataDirs : "/usr/local/share:/usr/share", ':')) {
@@ -52,8 +53,7 @@ std::vector<std::string> xdgDataDirs() {
 }
 
 MimeDatabase::MimeDatabase() {
-    // Directories are in priority order, and within globs2 lines are sorted by
-    // weight (highest first), so "first one wins" gives the right answer.
+    // dirs are in priority order and globs2 is sorted by weight, so first one wins is correct
     for (const std::string& dir : xdgDataDirs()) {
         std::ifstream in(dir + "/mime/globs2");
         for (std::string line; std::getline(in, line);) {
@@ -82,7 +82,7 @@ std::string MimeDatabase::mimeForName(std::string_view name) const {
 
     if (auto it = literal_.find(lower); it != literal_.end()) return it->second;
 
-    // Longest suffix first: "x.tar.gz" tries "tar.gz" before "gz".
+    // longest suffix first, "x.tar.gz" tries "tar.gz" before "gz"
     for (size_t dot = lower.find('.'); dot != std::string::npos; dot = lower.find('.', dot + 1)) {
         if (auto it = suffix_.find(lower.substr(dot + 1)); it != suffix_.end()) return it->second;
     }
@@ -97,16 +97,15 @@ std::vector<std::string> MimeDatabase::iconNames(const std::string& mime) const 
     std::vector<std::string> names;
     if (auto it = icons_.find(mime); it != icons_.end()) names.push_back(it->second);
 
-    std::string dashed = mime;  // "image/png" -> "image-png" (the spec's default rule)
+    std::string dashed = mime;  // "image/png" -> "image-png"
     for (char& c : dashed) {
         if (c == '/') c = '-';
     }
     names.push_back(dashed);
 
     if (auto it = genericIcons_.find(mime); it != genericIcons_.end()) names.push_back(it->second);
-    const std::string media = mime.substr(0, mime.find('/'));  // "image"
-    names.push_back(media + "-x-generic");
+    names.push_back(mime.substr(0, mime.find('/')) + "-x-generic");
     return names;
 }
 
-}  // namespace fe::linux_fs
+}  // namespace fe

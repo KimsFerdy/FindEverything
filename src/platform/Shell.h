@@ -4,11 +4,10 @@
 
 namespace fe {
 
-// Open a file or folder with the user's default application.
+// default app for the file (xdg-open)
 bool openPath(const std::string& path);
 
-// Open the containing folder in the file manager, with the item selected when
-// the file manager supports it.
+// open the parent folder in the file manager with the item selected, if it supports that
 bool revealInFileManager(const std::string& path);
 
 }  // namespace fe

@@ -4,23 +4,14 @@
 
 namespace fe {
 
-// Per-user folder for data we can always regenerate (the index), created if needed:
-//   Linux    $XDG_CACHE_HOME/findeverything  (default ~/.cache/findeverything)
-//   Windows  %LOCALAPPDATA%\FindEverything
-//   macOS    ~/Library/Caches/FindEverything
-// Empty string if it cannot be determined or created.
-std::string cacheDirectory();
+// xdg dirs, created if missing. "" if HOME isn't set or mkdir fails
+std::string cacheDirectory();   // $XDG_CACHE_HOME/findeverything  (~/.cache/findeverything)
+std::string configDirectory();  // $XDG_CONFIG_HOME/findeverything (~/.config/findeverything)
 
-// Per-user folder for settings, created if needed:
-//   Linux    $XDG_CONFIG_HOME/findeverything  (default ~/.config/findeverything)
-//   Windows  %APPDATA%\FindEverything
-//   macOS    ~/Library/Application Support/FindEverything
-std::string configDirectory();
+std::string indexCachePath();    // <cache>/index.bin
+std::string settingsFilePath();  // <config>/settings.ini
 
-std::string indexCachePath();     // cacheDirectory() + "/index.bin"
-std::string settingsFilePath();   // configDirectory() + "/settings.ini"
-
-// Absolute path of the running executable ("" if unknown).
+// from /proc/self/exe
 std::string executablePath();
 
 }  // namespace fe

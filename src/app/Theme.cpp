@@ -21,7 +21,7 @@ ImVec4 alpha(ImVec4 c, float a) {
     return c;
 }
 
-// Base surfaces, modelled on Mint-Y / Adwaita.
+// eyeballed from Mint-Y / Adwaita
 struct Palette {
     ImVec4 bg, surface, input, border, text, dim;
 };
@@ -38,8 +38,10 @@ Palette lightPalette() {
 
 void applyTheme(const SystemAppearance& ap, float scale) {
     ImGuiStyle style;
-    if (ap.dark) ImGui::StyleColorsDark(&style);
-    else ImGui::StyleColorsLight(&style);
+    if (ap.dark)
+        ImGui::StyleColorsDark(&style);
+    else
+        ImGui::StyleColorsLight(&style);
 
     style.WindowPadding = ImVec2(10, 10);
     style.FramePadding = ImVec2(10, 6);
@@ -84,8 +86,8 @@ void applyTheme(const SystemAppearance& ap, float scale) {
     c[ImGuiCol_Button] = p.surface;
     c[ImGuiCol_ButtonHovered] = mix(p.surface, accent, 0.25f);
     c[ImGuiCol_ButtonActive] = accent;
-    c[ImGuiCol_Header] = accent;                     // selected row
-    c[ImGuiCol_HeaderHovered] = alpha(accent, 0.18f);  // hovered row / menu item
+    c[ImGuiCol_Header] = accent;  // selected row
+    c[ImGuiCol_HeaderHovered] = alpha(accent, 0.18f);
     c[ImGuiCol_HeaderActive] = alpha(accent, 0.55f);
     c[ImGuiCol_Separator] = p.border;
     c[ImGuiCol_SeparatorHovered] = accent;
@@ -106,7 +108,7 @@ void applyTheme(const SystemAppearance& ap, float scale) {
 
     g_colors.folderIcon = ImGui::ColorConvertFloat4ToU32(accent);
     g_colors.fileIcon = ImGui::ColorConvertFloat4ToU32(alpha(p.dim, 0.9f));
-    g_colors.selectedText = IM_COL32(255, 255, 255, 255);  // GTK puts white text on the accent colour
+    g_colors.selectedText = IM_COL32(255, 255, 255, 255);  // white on accent, like gtk
     g_colors.dimText = p.dim;
 }
 
@@ -114,11 +116,10 @@ void loadFonts(const SystemAppearance& ap, float scale) {
     ImGuiIO& io = ImGui::GetIO();
     if (!ap.fontFile.empty()) {
         ImFontConfig cfg;
-        cfg.OversampleH = 2;  // sharper sub-pixel horizontal positioning
+        cfg.OversampleH = 2;
         cfg.OversampleV = 1;
         const float sizePx = std::round(ap.fontSizePx * scale);
-        // Latin + Greek + Cyrillic. Other scripts (CJK, Arabic...) show as '?'
-        // until we add fallback fonts; see docs/ROADMAP.md.
+        // latin + greek + cyrillic, anything else shows as '?' for now
         static const ImWchar ranges[] = {0x0020, 0x024F, 0x0370, 0x03FF, 0x0400, 0x052F, 0x2000, 0x206F, 0};
         if (io.Fonts->AddFontFromFileTTF(ap.fontFile.c_str(), sizePx, &cfg, ranges)) return;
     }
@@ -127,8 +128,6 @@ void loadFonts(const SystemAppearance& ap, float scale) {
     io.Fonts->AddFontDefault(&cfg);
 }
 
-const ThemeColors& themeColors() {
-    return g_colors;
-}
+const ThemeColors& themeColors() { return g_colors; }
 
 }  // namespace fe

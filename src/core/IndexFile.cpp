@@ -12,7 +12,7 @@ namespace {
 
 constexpr char kMagic[8] = {'F', 'E', 'I', 'N', 'D', 'E', 'X', '\0'};
 constexpr uint32_t kVersion = 1;
-constexpr uint32_t kByteOrderMark = 0x01020304;  // reads back differently on the other endianness
+constexpr uint32_t kByteOrderMark = 0x01020304;
 
 struct FileHeader {
     char magic[8];
@@ -36,9 +36,8 @@ bool saveIndex(const Index& index, const std::string& path, const std::string& s
     h.sourceLen = static_cast<uint32_t>(source.size());
     h.recordCount = index.records_.size();
     h.nameBytes = index.names_.size();
-    h.createdAt = std::chrono::duration_cast<std::chrono::seconds>(
-                      std::chrono::system_clock::now().time_since_epoch())
-                      .count();
+    h.createdAt =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
     const std::string tmp = path + ".tmp";
     {
@@ -75,7 +74,7 @@ bool loadIndex(Index& index, const std::string& path, IndexFileInfo* info) {
         return false;
     }
 
-    // The file must be exactly as long as the header says, before we allocate anything.
+    // check the size before allocating anything off of header values
     std::error_code ec;
     const uint64_t expected = sizeof h + h.sourceLen + h.recordCount * sizeof(FileRecord) + h.nameBytes;
     if (std::filesystem::file_size(path, ec) != expected || ec) return false;
@@ -92,8 +91,8 @@ bool loadIndex(Index& index, const std::string& path, IndexFileInfo* info) {
         return false;
     }
 
-    // Never trust a file: a bad offset or parent here would mean reading out of
-    // bounds later. Parents must come before children (PathCache relies on it).
+    // don't trust the file. bad offsets = out of bounds reads later.
+    // parents also have to come before children, PathCache depends on that
     for (RecordId id = 0; id < index.records_.size(); ++id) {
         const FileRecord& r = index.records_[id];
         const bool nameOk = uint64_t{r.nameOffset} + r.nameLen <= h.nameBytes;

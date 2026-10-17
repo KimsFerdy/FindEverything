@@ -8,7 +8,7 @@ namespace fe {
 
 namespace {
 
-// Bytes >= 0x80 belong to multi-byte UTF-8 characters, i.e. letters in other scripts.
+// bytes >= 0x80 are utf-8 multibyte chars, so letters in other scripts
 bool isWordChar(char c) {
     const auto u = static_cast<unsigned char>(c);
     return std::isalnum(u) || u >= 0x80;
@@ -25,7 +25,7 @@ bool contains(std::string_view haystack, std::string_view term, bool wholeWord) 
     return false;
 }
 
-// One per thread: owns the scratch buffer used to assemble full paths.
+// one per thread, owns the scratch buffer for building full paths
 class Matcher {
 public:
     Matcher(const Index& index, const Query& query, const PathCache* paths)
@@ -64,7 +64,7 @@ private:
         if (parent == kNoParent) return name;
 
         scratch_.assign(q_.matchCase ? paths_->dirPath(parent) : paths_->lowerDirPath(parent));
-        if (!scratch_.empty() && scratch_.back() != '/' && scratch_.back() != '\\') scratch_ += kPathSeparator;
+        if (!scratch_.empty() && scratch_.back() != kPathSeparator) scratch_ += kPathSeparator;
         scratch_.append(name);
         return scratch_;
     }
@@ -80,9 +80,9 @@ private:
 std::vector<RecordId> search(const Index& index, const Query& query, unsigned threads, const PathCache* paths) {
     const size_t n = index.size();
     if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
-    if (n < 100'000) threads = 1;  // spawning threads costs more than scanning a small index
+    if (n < 100'000) threads = 1;  // not worth spinning up threads for small indexes
 
-    // Each thread scans its own contiguous slice into its own vector: no locks needed.
+    // each thread gets its own slice + own output vector, so no locking
     std::vector<std::vector<RecordId>> partial(threads);
     auto work = [&](unsigned t) {
         Matcher matches(index, query, paths);

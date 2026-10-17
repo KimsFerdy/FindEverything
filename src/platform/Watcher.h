@@ -6,16 +6,13 @@
 
 namespace fe {
 
-// Live updates after the initial scan, so the index never goes stale.
-// Per-OS backends:
-//   Linux   fanotify (whole-filesystem events) with inotify as fallback
-//   Windows NTFS USN change journal
-//   macOS   FSEvents
+// live updates after the first scan so the index doesn't go stale.
+// plan: fanotify (whole filesystem marks) when we have the caps, inotify otherwise
 struct FsEvent {
     enum class Kind { Created, Deleted, Modified, Renamed };
     Kind kind;
     std::string path;
-    std::string newPath;  // only for Renamed
+    std::string newPath;  // Renamed only
 };
 
 class Watcher {
@@ -23,11 +20,10 @@ public:
     virtual ~Watcher() = default;
     virtual bool start(const std::vector<std::string>& roots) = 0;
     virtual void stop() = 0;
-    // Non-blocking: returns events collected since the last call.
-    virtual std::vector<FsEvent> poll() = 0;
+    virtual std::vector<FsEvent> poll() = 0;  // non blocking, whatever came in since last call
 };
 
-// Returns nullptr while the platform backend isn't implemented yet.
+// nullptr until it's written
 std::unique_ptr<Watcher> createWatcher();
 
 }  // namespace fe

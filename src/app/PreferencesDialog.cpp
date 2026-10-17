@@ -1,11 +1,10 @@
 #include "app/PreferencesDialog.h"
 
-#include "app/Theme.h"
-
-#include "imgui.h"
-
 #include <algorithm>
 #include <cmath>
+
+#include "app/Theme.h"
+#include "imgui.h"
 
 namespace fe {
 
@@ -43,7 +42,7 @@ PreferencesDialog::Result PreferencesDialog::draw() {
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_NoSavedSettings)) return Result::None;
 
-    // Tabs fill the window except for the button row at the bottom.
+    // tabs take everything except the button row
     const float buttonRow = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     ImGui::BeginChild("tabs", ImVec2(0, -buttonRow));
     if (ImGui::BeginTabBar("prefs_tabs")) {
@@ -81,14 +80,27 @@ void PreferencesDialog::drawGeneralTab() {
     ImGui::Spacing();
     ImGui::Checkbox("Start FindEverything when I log in", &draft_.launchAtLogin);
     ImGui::Indent();
-    hint("Starts minimized, so the index is ready the first time you need it.");
+    ImGui::BeginDisabled(!draft_.launchAtLogin || !draft_.trayIcon);
+    ImGui::Checkbox("Start in the tray instead of opening the window", &draft_.startInTray);
+    ImGui::EndDisabled();
+    hint("The index is ready the first time you need it. Without the tray it starts minimized.");
+    ImGui::Unindent();
+
+    ImGui::Spacing();
+    ImGui::Checkbox("Show icon in the system tray", &draft_.trayIcon);
+    ImGui::Indent();
+    ImGui::BeginDisabled(!draft_.trayIcon);
+    ImGui::Checkbox("Closing the window keeps FindEverything running in the tray", &draft_.closeToTray);
+    ImGui::EndDisabled();
+    hint("Left click the tray icon to show / hide the window, right click for the menu.");
     ImGui::Unindent();
 
     ImGui::Spacing();
     ImGui::Checkbox("Rescan disks on startup", &draft_.rescanOnStartup);
     ImGui::Indent();
-    hint("Off: start with the saved index and only rescan when you press F5. "
-         "Faster and quieter, but new files won't show up until you do.");
+    hint(
+        "Off: start with the saved index and only rescan when you press F5. "
+        "Faster and quieter, but new files won't show up until you do.");
     ImGui::Unindent();
 }
 
@@ -109,8 +121,10 @@ void PreferencesDialog::drawIndexesTab() {
             bool included = !contains(draft_.excludedVolumes, v.path);
             if (ImGui::Checkbox(v.path.c_str(), &included)) {
                 auto& list = draft_.excludedVolumes;
-                if (included) list.erase(std::remove(list.begin(), list.end(), v.path), list.end());
-                else list.push_back(v.path);
+                if (included)
+                    list.erase(std::remove(list.begin(), list.end(), v.path), list.end());
+                else
+                    list.push_back(v.path);
             }
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(v.device.c_str());
@@ -145,7 +159,7 @@ void PreferencesDialog::drawIndexesTab() {
     ImGui::SameLine();
     if ((ImGui::Button("Add", ImVec2(addWidth, 0)) || enter) && folderInput_[0]) {
         std::string folder = folderInput_;
-        while (folder.size() > 1 && (folder.back() == '/' || folder.back() == '\\')) folder.pop_back();
+        while (folder.size() > 1 && folder.back() == '/') folder.pop_back();
         if (!contains(folders, folder)) folders.push_back(folder);
         folderInput_[0] = '\0';
     }

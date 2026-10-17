@@ -1,13 +1,11 @@
 #pragma once
 
-#include "platform/Appearance.h"
-
 #include "imgui.h"
+#include "platform/Appearance.h"
 
 namespace fe {
 
-// Colours the app derives from the system appearance, for things ImGui's style
-// doesn't cover (icons, selected-row text...).
+// colours imgui's style doesn't have a slot for
 struct ThemeColors {
     ImU32 folderIcon;
     ImU32 fileIcon;
@@ -15,7 +13,7 @@ struct ThemeColors {
     ImVec4 dimText;
 };
 
-// scale = monitor content scale (1.0 normal, 2.0 HiDPI). Call before the first frame.
+// scale = monitor content scale
 void applyTheme(const SystemAppearance& appearance, float scale);
 void loadFonts(const SystemAppearance& appearance, float scale);
 

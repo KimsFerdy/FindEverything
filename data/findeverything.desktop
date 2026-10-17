@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FindEverything
+GenericName=File Search
+Comment=Instant file search
+Exec=FindEverything
+Icon=findeverything
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=search;find;files;locate;everything;
+StartupWMClass=findeverything

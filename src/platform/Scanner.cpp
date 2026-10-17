@@ -1,14 +1,7 @@
-// Linux filesystem scanner, using raw POSIX calls instead of std::filesystem so
-// you can see what actually happens underneath:
-//
-//   open(O_DIRECTORY)  get a file descriptor for a directory
-//   readdir()          list its entries (wraps the getdents64 syscall)
-//   fstatat()          size / mtime / type of one entry, relative to the dir fd
-//
-// Try `strace -c ./fe-cli --root ~ foo` to count the syscalls this makes.
+// plain posix instead of std::filesystem: open(O_DIRECTORY) + readdir (getdents64) + fstatat.
+// way less overhead and we get d_type / st_dev for free
 
 #include "platform/Scanner.h"
-#include "platform/linux/LinuxMounts.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -17,6 +10,8 @@
 
 #include <unordered_set>
 
+#include "platform/Mounts.h"
+
 namespace fe {
 
 namespace {
@@ -24,12 +19,10 @@ namespace {
 struct PendingDir {
     std::string path;
     RecordId id;
-    dev_t device;  // which filesystem this directory lives on
+    dev_t device;
 };
 
-bool isDotOrDotDot(const char* n) {
-    return n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'));
-}
+bool isDotOrDotDot(const char* n) { return n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0')); }
 
 }  // namespace
 
@@ -37,8 +30,7 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
     const std::unordered_set<std::string> excluded(opts.excludes.begin(), opts.excludes.end());
     const std::unordered_set<std::string> rootSet(opts.roots.begin(), opts.roots.end());
 
-    // Iterative depth-first walk with an explicit stack: deep trees can't overflow
-    // the call stack the way recursion could.
+    // explicit stack instead of recursion, deep trees won't blow the call stack
     std::vector<PendingDir> stack;
     for (const std::string& root : opts.roots) {
         struct stat st {};
@@ -53,13 +45,13 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
         PendingDir dir = std::move(stack.back());
         stack.pop_back();
 
-        // O_NOFOLLOW: never follow a symlink into another directory (avoids loops).
+        // O_NOFOLLOW so symlinked dirs can't send us in loops
         int fd = open(dir.path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (fd < 0) {
             if (progress) progress->errors.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
-        DIR* d = fdopendir(fd);  // takes ownership of fd
+        DIR* d = fdopendir(fd);  // owns fd now
         if (!d) {
             close(fd);
             continue;
@@ -69,14 +61,14 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
             const char* name = e->d_name;
             if (isDotOrDotDot(name)) continue;
 
-            // d_type comes for free from getdents64 on most filesystems. Some
-            // (older XFS, some network FS) report DT_UNKNOWN and need a stat().
+            // some filesystems give DT_UNKNOWN, those need a stat
             unsigned char type = e->d_type;
             uint64_t size = 0;
             int64_t mtime = 0;
             dev_t device = dir.device;
             bool executable = false;
-            const bool needStat = opts.collectMetadata || type == DT_UNKNOWN || (opts.stayOnFilesystem && type == DT_DIR);
+            const bool needStat =
+                opts.collectMetadata || type == DT_UNKNOWN || (opts.stayOnFilesystem && type == DT_DIR);
             if (needStat) {
                 struct stat st {};
                 if (fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
@@ -84,9 +76,12 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
                     mtime = st.st_mtime;
                     device = st.st_dev;
                     executable = S_ISREG(st.st_mode) && (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH));
-                    if (S_ISDIR(st.st_mode)) type = DT_DIR;
-                    else if (S_ISLNK(st.st_mode)) type = DT_LNK;
-                    else if (type == DT_UNKNOWN) type = DT_REG;
+                    if (S_ISDIR(st.st_mode))
+                        type = DT_DIR;
+                    else if (S_ISLNK(st.st_mode))
+                        type = DT_LNK;
+                    else if (type == DT_UNKNOWN)
+                        type = DT_REG;
                 }
             }
 
@@ -96,10 +91,10 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
                 child = dir.path;
                 if (child.back() != '/') child += '/';
                 child += name;
-                if (excluded.count(child)) continue;  // left out entirely
-                // st_dev changes at a mount point: we're about to enter another disk.
+                if (excluded.count(child)) continue;
+                // st_dev changes = mount point, we're about to walk onto another disk
                 const bool otherFilesystem = device != dir.device;
-                if (otherFilesystem && rootSet.count(child)) continue;  // indexed as its own root
+                if (otherFilesystem && rootSet.count(child)) continue;  // it's its own root
                 descend = !(opts.stayOnFilesystem && otherFilesystem);
             }
 
@@ -113,21 +108,15 @@ bool scanFilesystem(Index& index, const ScanOptions& opts, ScanProgress* progres
 
             if (descend) stack.push_back({std::move(child), id, device});
         }
-        closedir(d);  // also closes fd
+        closedir(d);  // closes fd too
     }
     return true;
 }
 
-std::vector<std::string> defaultRoots() {
-    return {"/"};
-}
-
 std::vector<std::string> defaultExcludes() {
-    // Skip every mount point that is a kernel/virtual filesystem (/proc, /sys, /dev,
-    // /run, snap squashfs images...). Real disks mounted anywhere are still scanned.
     std::vector<std::string> out = {"/proc", "/sys", "/dev"};
-    for (const linux_fs::MountInfo& m : linux_fs::readMounts()) {
-        if (linux_fs::isPseudoFilesystem(m.fsType) && m.mountPoint != "/") out.push_back(m.mountPoint);
+    for (const MountInfo& m : readMounts()) {
+        if (isPseudoFilesystem(m.fsType) && m.mountPoint != "/") out.push_back(m.mountPoint);
     }
     return out;
 }

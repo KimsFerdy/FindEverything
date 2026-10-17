@@ -1,26 +1,20 @@
 #pragma once
 
-#include "core/FileRecord.h"
-
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/FileRecord.h"
+
 namespace fe {
 
-#ifdef _WIN32
-inline constexpr char kPathSeparator = '\\';
-#else
 inline constexpr char kPathSeparator = '/';
-#endif
 
 struct IndexFileInfo;
 
-// In-memory database of every file and folder.
-//
-// Layout: one flat vector of FileRecord, plus one big string ("name pool") holding
-// all names back to back. A lowercased copy of the pool makes case-insensitive
-// search a plain memory scan, which is what keeps searching millions of names fast.
+// every file and folder we know about.
+// flat records + one big string with all the names back to back. there's also a
+// lowercased copy of that string so case-insensitive search is just a memory scan.
 class Index {
 public:
     RecordId add(RecordId parent, std::string_view name, uint8_t flags, uint64_t size, int64_t mtime);
@@ -34,18 +28,17 @@ public:
     std::string_view name(RecordId id) const;
     std::string_view lowerName(RecordId id) const;
 
-    // Rebuilds "/home/kims/notes.txt" by walking parent links up to the root.
+    // walks the parents up to the root. fine for a few rows, don't call it in a hot loop
     std::string fullPath(RecordId id) const;
 
 private:
-    // Serialization (core/IndexFile.cpp) reads and writes the raw arrays directly.
     friend bool saveIndex(const Index&, const std::string&, const std::string&);
     friend bool loadIndex(Index&, const std::string&, IndexFileInfo*);
     void rebuildLowerNames();
 
     std::vector<FileRecord> records_;
     std::string names_;
-    std::string lowerNames_;  // TODO: ASCII-only lowering; full UTF-8 case folding later
+    std::string lowerNames_;  // TODO(claude): ascii only for now, proper utf-8 case folding later
 };
 
 }  // namespace fe

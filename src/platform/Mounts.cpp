@@ -1,4 +1,4 @@
-#include "platform/linux/LinuxMounts.h"
+#include "platform/Mounts.h"
 
 #include <algorithm>
 #include <array>
@@ -6,11 +6,11 @@
 #include <sstream>
 #include <string_view>
 
-namespace fe::linux_fs {
+namespace fe {
 
 namespace {
 
-// mountinfo escapes space, tab, newline and backslash as octal: "\040" == ' '.
+// mountinfo escapes spaces etc as octal, "\040" == ' '
 std::string unescapeOctal(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.size(); ++i) {
@@ -30,10 +30,8 @@ std::string unescapeOctal(const std::string& s) {
 }  // namespace
 
 std::vector<MountInfo> readMounts() {
-    // Line format (see `man 5 proc`, section /proc/pid/mountinfo):
     // 36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
-    // (1)(2) (3)   (4)   (5)      (6)      (7)   (8) (9)   (10)        (11)
-    // Field 7 is a variable-length list, terminated by the lone "-" in (8).
+    // field 7 is variable length, ends at the lone "-"  (man 5 proc)
     std::vector<MountInfo> mounts;
     std::ifstream in("/proc/self/mountinfo");
     std::string line;
@@ -57,12 +55,11 @@ std::vector<MountInfo> readMounts() {
 
 bool isPseudoFilesystem(const std::string& fsType) {
     static const std::array<std::string_view, 24> kPseudo = {
-        "proc",     "sysfs",      "devtmpfs", "devpts",   "tmpfs",     "cgroup",
-        "cgroup2",  "securityfs", "debugfs",  "tracefs",  "fusectl",   "configfs",
-        "bpf",      "pstore",     "mqueue",   "hugetlbfs", "autofs",   "efivarfs",
-        "binfmt_misc", "ramfs",   "nsfs",     "rpc_pipefs", "squashfs", "fuse.gvfsd-fuse",
+        "proc",    "sysfs",    "devtmpfs",    "devpts",   "tmpfs", "cgroup",     "cgroup2",  "securityfs",
+        "debugfs", "tracefs",  "fusectl",     "configfs", "bpf",   "pstore",     "mqueue",   "hugetlbfs",
+        "autofs",  "efivarfs", "binfmt_misc", "ramfs",    "nsfs",  "rpc_pipefs", "squashfs", "fuse.gvfsd-fuse",
     };
     return std::find(kPseudo.begin(), kPseudo.end(), fsType) != kPseudo.end();
 }
 
-}  // namespace fe::linux_fs
+}  // namespace fe

@@ -1,17 +1,19 @@
 #include "app/MainWindow.h"
 
-#include "app/Theme.h"
-#include "core/IndexFile.h"
-#include "core/Search.h"
-#include "platform/Autostart.h"
-#include "platform/Paths.h"
-#include "platform/Shell.h"
-
-#include "imgui.h"
-
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
+#include <utility>
+
+#include "AppIcon.h"
+#include "app/Theme.h"
+#include "core/IndexFile.h"
+#include "core/Search.h"
+#include "imgui.h"
+#include "platform/Autostart.h"
+#include "platform/Paths.h"
+#include "platform/Shell.h"
+#include "stb_image.h"
 
 #ifndef FE_VERSION
 #define FE_VERSION "dev"
@@ -37,11 +39,7 @@ std::string formatSize(uint64_t bytes) {
 std::string formatTime(int64_t unixSeconds) {
     std::time_t t = static_cast<std::time_t>(unixSeconds);
     std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
     localtime_r(&t, &tm);
-#endif
     char buf[32];
     std::strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", &tm);
     return buf;
@@ -52,20 +50,22 @@ double msSince(std::chrono::steady_clock::time_point start) {
 }
 
 std::string formatAge(int64_t unixSeconds) {
-    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
+    const int64_t now =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     const int64_t s = std::max<int64_t>(0, now - unixSeconds);
     char buf[32];
-    if (s < 60) std::snprintf(buf, sizeof buf, "just now");
-    else if (s < 3600) std::snprintf(buf, sizeof buf, "%lld min ago", static_cast<long long>(s / 60));
-    else if (s < 86400) std::snprintf(buf, sizeof buf, "%lld h ago", static_cast<long long>(s / 3600));
-    else std::snprintf(buf, sizeof buf, "%lld days ago", static_cast<long long>(s / 86400));
+    if (s < 60)
+        std::snprintf(buf, sizeof buf, "just now");
+    else if (s < 3600)
+        std::snprintf(buf, sizeof buf, "%lld min ago", static_cast<long long>(s / 60));
+    else if (s < 86400)
+        std::snprintf(buf, sizeof buf, "%lld h ago", static_cast<long long>(s / 3600));
+    else
+        std::snprintf(buf, sizeof buf, "%lld days ago", static_cast<long long>(s / 86400));
     return buf;
 }
 
-
-// Tiny vector icons drawn with ImGui's draw list, so we need no icon font.
+// fallback when the icon theme has nothing
 void drawIcon(ImVec2 pos, float lineHeight, bool isDir, ImU32 color) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float s = lineHeight * 0.85f;
@@ -83,12 +83,63 @@ void drawIcon(ImVec2 pos, float lineHeight, bool isDir, ImU32 color) {
     }
 }
 
+// app icon as ARGB32 (network order) at a few sizes, the panel picks one
+std::vector<Tray::Icon> trayIcons() {
+    int w, h, channels;
+    uint8_t* rgba = stbi_load_from_memory(kAppIconPng, sizeof kAppIconPng, &w, &h, &channels, 4);
+    if (!rgba) return {};
+    std::vector<Tray::Icon> icons;
+    for (int size : {w, 64, 32}) {
+        const int step = w / size;  // 256 -> 64/32 is an exact box filter
+        if (step < 1 || w % size != 0 || h != w) continue;
+        Tray::Icon icon{size, size, std::vector<uint8_t>(static_cast<size_t>(size) * size * 4)};
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                unsigned sum[4] = {0, 0, 0, 0};
+                for (int dy = 0; dy < step; ++dy) {
+                    for (int dx = 0; dx < step; ++dx) {
+                        const uint8_t* p = rgba + ((y * step + dy) * w + (x * step + dx)) * 4;
+                        for (int c = 0; c < 4; ++c) sum[c] += p[c];
+                    }
+                }
+                uint8_t* out = &icon.argb[(static_cast<size_t>(y) * size + x) * 4];
+                const unsigned n = static_cast<unsigned>(step * step);
+                out[0] = static_cast<uint8_t>(sum[3] / n);  // A R G B
+                out[1] = static_cast<uint8_t>(sum[0] / n);
+                out[2] = static_cast<uint8_t>(sum[1] / n);
+                out[3] = static_cast<uint8_t>(sum[2] / n);
+            }
+        }
+        icons.push_back(std::move(icon));
+    }
+    stbi_image_free(rgba);
+    return icons;
+}
+
 }  // namespace
 
-MainWindow::MainWindow(const SystemAppearance& system, float displayScale)
-    : systemAppearance_(system), displayScale_(displayScale), settings_(loadSettings()) {
+MainWindow::MainWindow(const SystemAppearance& system, float displayScale, std::function<void()> wake)
+    : systemAppearance_(system), displayScale_(displayScale), settings_(loadSettings()), wake_(std::move(wake)) {
     applyTheme(appearance(), displayScale_);
+    updateTray();
 }
+
+void MainWindow::updateTray() {
+    if (settings_.trayIcon && !tray_) tray_ = std::make_unique<Tray>(trayIcons(), wake_);
+    if (!settings_.trayIcon) tray_.reset();
+}
+
+void MainWindow::rememberWindowGeometry(const WindowGeometry& geometry) {
+    if (geometry == settings_.window) return;
+    settings_.window = geometry;
+    saveSettings(settings_);
+}
+
+bool MainWindow::hideOnClose() const {
+    return settings_.trayIcon && settings_.closeToTray && tray_ && tray_->available();
+}
+
+MainWindow::WindowRequest MainWindow::takeWindowRequest() { return std::exchange(windowRequest_, WindowRequest::None); }
 
 SystemAppearance MainWindow::appearance() const {
     SystemAppearance a = systemAppearance_;
@@ -111,15 +162,71 @@ void MainWindow::configureScan() {
     scanSource_ = scanSourceFor(scanOptions_, settings_);
 }
 
-void MainWindow::start() {
+void MainWindow::start(bool background) {
     cachePath_ = indexCachePath();
     configureScan();
     startIndexing(/*loadCacheFirst=*/true, /*scan=*/settings_.rescanOnStartup);
+
+    startTime_ = std::chrono::steady_clock::now();
+    if (background && tray_ && settings_.startInTray)
+        waitingForTray_ = true;  // stay hidden
+    else
+        windowRequest_ = background ? WindowRequest::Minimize : WindowRequest::Show;
+}
+
+void MainWindow::setQuery(const std::string& text) {
+    text.copy(queryBuf_, sizeof queryBuf_ - 1);
+    queryBuf_[std::min(text.size(), sizeof queryBuf_ - 1)] = '\0';
+    runSearch();  // no-op until the index is in, adoptIndex searches again anyway
+}
+
+void MainWindow::tick() {
+    {
+        std::lock_guard lock(pendingMutex_);
+        if (pending_) {
+            const bool fresh = pending_->cachedAt == 0;
+            const bool final = pending_->final;
+            cachedIndexTime_ = pending_->cachedAt;
+            adoptIndex(std::move(pending_));
+            if (final) scanning_ = false;
+            if (fresh) scanSeconds_ = msSince(scanStart_) / 1000.0;
+        }
+    }
+
+    if (tray_) {
+        for (Tray::Action action : tray_->takeActions()) {
+            switch (action) {
+                case Tray::Action::Toggle:
+                    windowRequest_ = WindowRequest::Toggle;
+                    break;
+                case Tray::Action::Show:
+                    windowRequest_ = WindowRequest::Show;
+                    break;
+                case Tray::Action::Rescan:
+                    startIndexing();
+                    break;
+                case Tray::Action::Quit:
+                    quit_ = true;
+                    break;
+            }
+        }
+    }
+    if (windowRequest_ == WindowRequest::Show || windowRequest_ == WindowRequest::Toggle) focusSearch_ = true;
+
+    // started hidden but the panel never picked up our icon, don't stay invisible forever
+    if (waitingForTray_) {
+        if (tray_ && tray_->available()) {
+            waitingForTray_ = false;
+        } else if (std::chrono::steady_clock::now() - startTime_ > std::chrono::seconds(30)) {
+            waitingForTray_ = false;
+            windowRequest_ = WindowRequest::Minimize;
+        }
+    }
 }
 
 void MainWindow::restartIndexing() {
     if (scanThread_.joinable()) {
-        progress_.cancel = true;  // the scanner checks this between directories
+        progress_.cancel = true;  // checked between directories
         scanThread_.join();
     }
     scanning_ = false;
@@ -136,43 +243,42 @@ void MainWindow::startIndexing(bool loadCacheFirst, bool scan) {
     progress_.cancel = false;
     scanStart_ = std::chrono::steady_clock::now();
 
-    // The old index stays searchable while the new one is built.
-    scanThread_ = std::thread([this, loadCacheFirst, scan, opts = scanOptions_, cachePath = cachePath_,
-                               source = scanSource_] {
-        // Derive the path cache and sort orders here too, so the UI never stalls.
-        auto publish = [this](std::unique_ptr<Index> index, int64_t cachedAt, bool final) {
-            auto snapshot = std::make_unique<IndexSnapshot>();
-            snapshot->index = std::move(index);
-            snapshot->paths.build(*snapshot->index);
-            snapshot->sorts.build(*snapshot->index, snapshot->paths);
-            snapshot->cachedAt = cachedAt;
-            snapshot->final = final;
-            std::lock_guard lock(pendingMutex_);
-            pending_ = std::move(snapshot);
-        };
+    // old index stays searchable while this runs
+    scanThread_ =
+        std::thread([this, loadCacheFirst, scan, opts = scanOptions_, cachePath = cachePath_, source = scanSource_] {
+            // path cache + sort orders get built here too so the ui never stalls
+            auto publish = [this](std::unique_ptr<Index> index, int64_t cachedAt, bool final) {
+                auto snapshot = std::make_unique<IndexSnapshot>();
+                snapshot->index = std::move(index);
+                snapshot->paths.build(*snapshot->index);
+                snapshot->sorts.build(*snapshot->index, snapshot->paths);
+                snapshot->cachedAt = cachedAt;
+                snapshot->final = final;
+                std::lock_guard lock(pendingMutex_);
+                pending_ = std::move(snapshot);
+            };
 
-        // Show the last saved index right away, then refresh it. Without live
-        // updates (M3) the cache can be out of date; the rescan fixes that.
-        if (loadCacheFirst && !cachePath.empty()) {
-            auto cached = std::make_unique<Index>();
-            IndexFileInfo info;
-            if (loadIndex(*cached, cachePath, &info) && info.source == source) {
-                publish(std::move(cached), info.createdAt, /*final=*/!scan);
-                if (!scan) return;
+            // show the saved index right away, then rescan.
+            // TODO(claude): once live updates land we can skip most of these rescans
+            if (loadCacheFirst && !cachePath.empty()) {
+                auto cached = std::make_unique<Index>();
+                IndexFileInfo info;
+                if (loadIndex(*cached, cachePath, &info) && info.source == source) {
+                    publish(std::move(cached), info.createdAt, /*final=*/!scan);
+                    if (!scan) return;
+                }
             }
-        }
 
-        auto index = std::make_unique<Index>();
-        if (!scanFilesystem(*index, opts, &progress_)) return;  // cancelled
+            auto index = std::make_unique<Index>();
+            if (!scanFilesystem(*index, opts, &progress_)) return;  // cancelled
 
-        // Saved from this thread so the UI never waits for the disk.
-        if (!cachePath.empty()) saveIndex(*index, cachePath, source);
-        publish(std::move(index), 0, /*final=*/true);
-    });
+            if (!cachePath.empty()) saveIndex(*index, cachePath, source);
+            publish(std::move(index), 0, /*final=*/true);
+        });
 }
 
 void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
-    // Keep the same row selected across the swap (record ids change between scans).
+    // keep the same row selected across the swap, ids change between scans
     std::string selectedPath = (index_ && selectedRow_ >= 0) ? index_->fullPath(results_[selectedRow_]) : "";
 
     index_ = std::move(snapshot->index);
@@ -181,7 +287,7 @@ void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
     runSearch();
 
     if (selectedPath.empty()) return;
-    std::string_view selectedName = std::string_view(selectedPath).substr(selectedPath.find_last_of("/\\") + 1);
+    std::string_view selectedName = std::string_view(selectedPath).substr(selectedPath.find_last_of('/') + 1);
     for (size_t i = 0; i < results_.size(); ++i) {
         if (index_->name(results_[i]) == selectedName && index_->fullPath(results_[i]) == selectedPath) {
             selectedRow_ = static_cast<int>(i);
@@ -215,8 +321,10 @@ void MainWindow::applyPreferences(Settings next) {
                          !std::equal(std::begin(next.accent), std::end(next.accent), std::begin(settings_.accent));
     const bool refont = restyle || next.fontZoom != settings_.fontZoom;
 
+    next.window = settings_.window;  // the dialog's copy is stale
     settings_ = std::move(next);
     if (!saveSettings(settings_)) setStatus("Could not save settings to " + settingsFilePath());
+    updateTray();
     if (restyle) applyTheme(appearance(), displayScale_);
     if (refont) fontsDirty_ = true;
     if (rescan) {
@@ -274,25 +382,12 @@ void MainWindow::copySelectedName() {
 }
 
 void MainWindow::draw() {
-    {
-        std::lock_guard lock(pendingMutex_);
-        if (pending_) {
-            const bool fresh = pending_->cachedAt == 0;
-            const bool final = pending_->final;
-            cachedIndexTime_ = pending_->cachedAt;
-            adoptIndex(std::move(pending_));
-            if (final) scanning_ = false;
-            if (fresh) scanSeconds_ = msSince(scanStart_) / 1000.0;
-        }
-    }
-
-    // One borderless window filling the whole OS window.
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::Begin("FindEverything", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_MenuBar);
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_MenuBar);  // saved settings on, that's what keeps column widths in imgui.ini
 
     drawMenuBar();
     handleKeyboard();
@@ -303,7 +398,7 @@ void MainWindow::draw() {
         focusSearch_ = false;
     }
     if (ImGui::InputTextWithHint("##query", "Search  (e.g.  report ext:pdf;docx !old)", queryBuf_, sizeof queryBuf_)) {
-        runSearch();  // search on every keystroke, like Everything
+        runSearch();  // every keystroke, like Everything
     }
 
     drawResultsTable();
@@ -317,7 +412,7 @@ void MainWindow::drawMenuBar() {
     if (!ImGui::BeginMenuBar()) return;
     const bool hasSelection = index_ && selectedRow_ >= 0;
 
-    // Shortcut labels are only displayed here; the keys are handled in handleKeyboard().
+    // shortcut labels are just text here, the keys live in handleKeyboard()
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Open", "Enter", false, hasSelection)) openSelected();
         if (ImGui::MenuItem("Open Containing Folder", "Ctrl+Enter", false, hasSelection)) revealSelected();
@@ -373,7 +468,7 @@ void MainWindow::drawMenuBar() {
         ImGui::EndMenu();
     }
 
-    // Right-aligned hint showing which search options are active.
+    // active search options, right aligned
     std::string active;
     if (searchOptions_.matchCase) active += "Case  ";
     if (searchOptions_.wholeWord) active += "Word  ";
@@ -429,8 +524,10 @@ void MainWindow::handleKeyboard() {
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) moveSelection(-20);
 
     if (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter)) {
-        if (ctrl) revealSelected();  // Ctrl+Enter: open containing folder (as in Everything)
-        else openSelected();
+        if (ctrl)
+            revealSelected();  // same as Everything
+        else
+            openSelected();
     }
     if (ctrl && shift && pressed(ImGuiKey_C)) copySelectedPath();
 }
@@ -442,11 +539,12 @@ void MainWindow::drawResultsTable() {
                                   ImGuiTableFlags_Sortable;
     if (!ImGui::BeginTable("results", kColumnCount, flags, ImVec2(0, -statusBarHeight))) return;
 
-    ImGui::TableSetupScrollFreeze(0, 1);  // keep header row visible
-    // The last argument (user id) tells us which SortKey a clicked header means.
+    ImGui::TableSetupScrollFreeze(0, 1);
+    // user id = SortKey, so we know what a header click means
     const float em = ImGui::GetFontSize();
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide |
-                                        ImGuiTableColumnFlags_DefaultSort, 2.0f, static_cast<ImGuiID>(SortKey::Name));
+    ImGui::TableSetupColumn(
+        "Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_DefaultSort,
+        2.0f, static_cast<ImGuiID>(SortKey::Name));
     ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 3.0f, static_cast<ImGuiID>(SortKey::Path));
     ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending,
                             em * 6, static_cast<ImGuiID>(SortKey::Size));
@@ -454,7 +552,6 @@ void MainWindow::drawResultsTable() {
                             ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, em * 9,
                             static_cast<ImGuiID>(SortKey::Modified));
 
-    // A header click marks the sort specs dirty; re-order the results once.
     if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsDirty) {
         if (specs->SpecsCount > 0) {
             sortKey_ = static_cast<SortKey>(specs->Specs[0].ColumnUserID);
@@ -464,11 +561,12 @@ void MainWindow::drawResultsTable() {
         applySort();
     }
 
-    // Columns can be hidden from the View menu *or* by right-clicking the header,
-    // so sync both ways: menu change -> table, otherwise table -> menu checkmarks.
+    // columns can be hidden from the View menu or the header right-click menu, keep both in sync
     for (int c = kPath; c < kColumnCount; ++c) {
-        if (columnsChanged_) ImGui::TableSetColumnEnabled(c, columnVisible_[c]);
-        else columnVisible_[c] = ImGui::TableGetColumnFlags(c) & ImGuiTableColumnFlags_IsEnabled;
+        if (columnsChanged_)
+            ImGui::TableSetColumnEnabled(c, columnVisible_[c]);
+        else
+            columnVisible_[c] = ImGui::TableGetColumnFlags(c) & ImGuiTableColumnFlags_IsEnabled;
     }
     columnsChanged_ = false;
 
@@ -481,8 +579,7 @@ void MainWindow::drawResultsTable() {
         const int iconPx = static_cast<int>(lineHeight + 0.5f);
         if (!icons_ || icons_->sizePx() != iconPx) icons_ = std::make_unique<IconCache>(appearance().iconTheme, iconPx);
 
-        // The clipper only gives us the rows currently on screen, so a list of
-        // 5 million results costs the same to draw as a list of 30.
+        // clipper = only the rows on screen get drawn, 5M results cost the same as 30
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(results_.size()));
         if (scrollToSelected_ && selectedRow_ >= 0) clipper.IncludeItemByIndex(selectedRow_);
@@ -497,7 +594,7 @@ void MainWindow::drawResultsTable() {
                 ImGui::TableSetColumnIndex(kName);
                 ImGui::PushID(row);
 
-                // An invisible full-row button handles clicks; we draw the content on top.
+                // invisible full-row selectable for clicks, content drawn on top
                 const ImVec2 start = ImGui::GetCursorScreenPos();
                 if (ImGui::Selectable("##row", selected,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap |
@@ -523,12 +620,14 @@ void MainWindow::drawResultsTable() {
                     ImGui::GetWindowDrawList()->AddImage(tex, p, ImVec2(p.x + px, p.y + px));
                 } else {
                     drawIcon(start, lineHeight, isDir,
-                             selected ? theme.selectedText : isDir ? theme.folderIcon : theme.fileIcon);
+                             selected ? theme.selectedText
+                             : isDir  ? theme.folderIcon
+                                      : theme.fileIcon);
                 }
                 ImGui::SetCursorScreenPos(ImVec2(start.x + iconWidth, start.y));
                 ImGui::TextUnformatted(name.data(), name.data() + name.size());
 
-                // TableSetColumnIndex returns false for hidden columns: skip their work.
+                // false for hidden columns, skip the work
                 if (ImGui::TableSetColumnIndex(kPath)) {
                     std::string_view dir = r.parent == kNoParent ? std::string_view() : paths_.dirPath(r.parent);
                     ImGui::TextUnformatted(dir.data(), dir.data() + dir.size());
@@ -562,8 +661,10 @@ void MainWindow::drawStatusBar() {
     if (showMessage) {
         ImGui::TextUnformatted(statusMessage_.c_str());
     } else if (!index_) {
-        if (scanned == 0) ImGui::TextUnformatted("Loading index...");
-        else ImGui::Text("Indexing...  %llu objects", scanned);
+        if (scanned == 0)
+            ImGui::TextUnformatted("Loading index...");
+        else
+            ImGui::Text("Indexing...  %llu objects", scanned);
     } else if (scanning_) {
         std::string age = cachedIndexTime_ ? "index from " + formatAge(cachedIndexTime_) + ", updating" : "rescanning";
         ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", index_->size(), results_.size(), age.c_str(),
@@ -579,8 +680,7 @@ void MainWindow::drawStatusBar() {
 }
 
 void MainWindow::drawHelpPopups() {
-    // Opened here, not inside the menu, because popup IDs are scoped to the
-    // window that opens them and the menu is its own window.
+    // opened here and not in the menu, popup ids are per window and the menu is its own window
     if (openSyntaxHelp_) ImGui::OpenPopup("Search Syntax");
     if (openAbout_) ImGui::OpenPopup("About FindEverything");
     openSyntaxHelp_ = openAbout_ = false;
@@ -590,12 +690,9 @@ void MainWindow::drawHelpPopups() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Search Syntax", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static const char* kRows[][2] = {
-            {"foo bar", "name contains foo AND bar"},
-            {"\"foo bar\"", "exact phrase"},
-            {"!tmp", "name does NOT contain tmp"},
-            {"ext:jpg;png", "extension is jpg or png"},
-            {"file:  folder:", "only files / only folders"},
-            {"src/main", "a term with / matches the full path"},
+            {"foo bar", "name contains foo AND bar"},        {"\"foo bar\"", "exact phrase"},
+            {"!tmp", "name does NOT contain tmp"},           {"ext:jpg;png", "extension is jpg or png"},
+            {"file:  folder:", "only files / only folders"}, {"src/main", "a term with / matches the full path"},
         };
         if (ImGui::BeginTable("syntax", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
             for (const auto& row : kRows) {
@@ -608,9 +705,11 @@ void MainWindow::drawHelpPopups() {
             ImGui::EndTable();
         }
         ImGui::Spacing();
-        ImGui::TextColored(themeColors().dimText, "Search menu: Match Case (Ctrl+I), Whole Word (Ctrl+B), Path (Ctrl+U)");
+        ImGui::TextColored(themeColors().dimText,
+                           "Search menu: Match Case (Ctrl+I), Whole Word (Ctrl+B), Path (Ctrl+U)");
         ImGui::Spacing();
-        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -622,7 +721,8 @@ void MainWindow::drawHelpPopups() {
         ImGui::TextColored(themeColors().dimText, "Instant file search, inspired by Everything by voidtools.");
         ImGui::TextColored(themeColors().dimText, "Built with Dear ImGui %s and GLFW.", IMGUI_VERSION);
         ImGui::Spacing();
-        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (ImGui::Button("Close", ImVec2(ImGui::GetFontSize() * 6, 0)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

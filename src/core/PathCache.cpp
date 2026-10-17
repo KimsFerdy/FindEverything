@@ -22,10 +22,10 @@ void PathCache::build(const Index& index) {
         if (!(r.flags & kIsDir)) continue;
 
         if (r.parent == kNoParent || slot_[r.parent] == kNoSlot) {
-            path = index.fullPath(id);  // roots (and the unexpected out-of-order case)
+            path = index.fullPath(id);  // roots, or something out of order
         } else {
             path.assign(dirPath(r.parent));
-            if (path.back() != '/' && path.back() != '\\') path += kPathSeparator;
+            if (path.back() != kPathSeparator) path += kPathSeparator;
             path.append(index.name(id));
         }
 

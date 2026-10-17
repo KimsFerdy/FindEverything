@@ -1,9 +1,11 @@
-// fe-cli: index a directory tree, then search it from the terminal.
-//
-//   fe-cli [--root DIR]... [--rescan] [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...
-//   fe-cli ext:pdf invoice           whole system, using the GUI's cached index if present
-//   fe-cli --rescan                  rescan "/" and refresh the cache
-//   fe-cli --root ~ ext:pdf invoice  scan just ~ (never cached)
+// fe-cli ext:pdf invoice            uses the gui's settings + cached index
+// fe-cli --rescan                   rescan and refresh the cache
+// fe-cli --root ~ ext:pdf invoice   just ~, never cached
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 
 #include "app/Settings.h"
 #include "core/IndexFile.h"
@@ -12,11 +14,6 @@
 #include "core/Search.h"
 #include "platform/Paths.h"
 #include "platform/Scanner.h"
-
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <string>
 
 namespace {
 
@@ -50,15 +47,15 @@ int main(int argc, char** argv) {
         } else if (arg == "--path") {
             searchOpts.matchPath = true;
         } else if (arg == "-h" || arg == "--help") {
-            std::puts("usage: fe-cli [--root DIR]... [--rescan] [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...");
+            std::puts(
+                "usage: fe-cli [--root DIR]... [--rescan] [--limit N] [--no-meta] [--case] [--word] [--path] QUERY...");
             return 0;
         } else {
             if (!queryText.empty()) queryText += ' ';
             queryText += arg;
         }
     }
-    // Whole-system searches use the GUI's settings (disks, excluded folders)
-    // and share its cache. --root scans exactly what you ask for, uncached.
+    // no --root = same disks/excludes as the gui, so we can share its cache
     const bool useCache = opts.roots.empty();
     std::string source;
     if (useCache) {

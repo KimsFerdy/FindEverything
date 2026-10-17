@@ -1,20 +1,20 @@
 #pragma once
 
-#include "app/Settings.h"
-#include "platform/Volumes.h"
-
 #include <string>
 #include <vector>
 
+#include "app/Settings.h"
+#include "platform/Volumes.h"
+
 namespace fe {
 
-// Edit -> Preferences. Edits a copy of the settings; nothing changes until OK.
+// edits a copy, nothing changes until OK
 class PreferencesDialog {
 public:
     enum class Result { None, Ok, Cancel };
 
     void open(const Settings& current);
-    Result draw();  // call every frame; returns Ok once when the user confirms
+    Result draw();  // every frame, returns Ok once on confirm
     const Settings& edited() const { return draft_; }
 
 private:

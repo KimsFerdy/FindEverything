@@ -1,18 +1,18 @@
 #include "platform/Volumes.h"
-#include "platform/linux/LinuxMounts.h"
 
 #include <algorithm>
+
+#include "platform/Mounts.h"
 
 namespace fe {
 
 std::vector<Volume> listVolumes() {
     std::vector<Volume> volumes;
-    for (const linux_fs::MountInfo& m : linux_fs::readMounts()) {
-        if (linux_fs::isPseudoFilesystem(m.fsType)) continue;
-        if (m.fsType == "overlay" || m.fsType.starts_with("fuse.")) continue;  // containers, network/virtual FUSE
+    for (const MountInfo& m : readMounts()) {
+        if (isPseudoFilesystem(m.fsType)) continue;
+        if (m.fsType == "overlay" || m.fsType.starts_with("fuse.")) continue;  // docker, network/virtual fuse
 
-        // The same partition can be mounted in several places (bind mounts);
-        // list it once, at its first (usually main) mount point.
+        // bind mounts show the same partition twice, keep the first one
         const bool duplicate = std::any_of(volumes.begin(), volumes.end(), [&](const Volume& v) {
             return v.device == m.source && m.source.starts_with("/dev/");
         });
@@ -22,7 +22,6 @@ std::vector<Volume> listVolumes() {
         v.path = m.mountPoint;
         v.device = m.source;
         v.fsType = m.fsType;
-        // Desktop automounters put USB sticks / SD cards here.
         v.removable = m.mountPoint.starts_with("/media/") || m.mountPoint.starts_with("/run/media/");
         volumes.push_back(std::move(v));
     }

@@ -1,5 +1,4 @@
-#include "platform/linux/IconTheme.h"
-#include "platform/linux/MimeDatabase.h"
+#include "platform/IconTheme.h"
 
 #include <algorithm>
 #include <cctype>
@@ -10,7 +9,9 @@
 #include <sstream>
 #include <unordered_map>
 
-namespace fe::linux_fs {
+#include "platform/MimeDatabase.h"
+
+namespace fe {
 
 namespace fs = std::filesystem;
 
@@ -18,7 +19,6 @@ namespace {
 
 using IniSection = std::unordered_map<std::string, std::string>;
 
-// index.theme is a desktop-entry style INI file: [Section] then Key=Value.
 std::unordered_map<std::string, IniSection> readIni(const std::string& path) {
     std::unordered_map<std::string, IniSection> ini;
     std::ifstream in(path);
@@ -50,8 +50,8 @@ int toInt(const IniSection& s, const char* key, int fallback) {
     return it == s.end() ? fallback : std::atoi(it->second.c_str());
 }
 
-// We only ever ask for file-type, folder and drive icons. Compared ignoring
-// case: the spec says "MimeTypes" but e.g. Mint-Y writes "Mimetypes".
+// we only need file type, folder and drive icons.
+// case insensitive because the spec says "MimeTypes" and Mint-Y writes "Mimetypes". fun
 bool usefulContext(const IniSection& s) {
     auto it = s.find("Context");
     if (it == s.end()) return true;
@@ -67,7 +67,7 @@ IconTheme::IconTheme(const std::string& name) {
     for (const std::string& d : xdgDataDirs()) baseDirs_.push_back(d + "/icons");
 
     if (!name.empty()) addTheme(name, 0);
-    addTheme("hicolor", 0);  // the spec's mandatory final fallback
+    addTheme("hicolor", 0);  // always last
 }
 
 void IconTheme::addTheme(const std::string& name, int depth) {
@@ -106,7 +106,7 @@ void IconTheme::addTheme(const std::string& name, int depth) {
     }
     chain_.push_back(std::move(theme));
 
-    // Parents come after the theme itself, depth first (as the spec says).
+    // parents after the theme itself, depth first
     for (const std::string& parent : splitList(header.count("Inherits") ? header.at("Inherits") : "")) {
         if (parent != "hicolor") addTheme(parent, depth + 1);
     }
@@ -118,15 +118,13 @@ std::string IconTheme::lookup(const Theme& theme, const std::string& name, int s
     std::error_code ec;
 
     for (const Dir& d : theme.dirs) {
-        // How far is this folder's size from what we want? (spec: DirectorySizeDistance)
         int distance;
-        const int want = sizePx;
         if (d.type == Dir::Type::Fixed) {
-            distance = std::abs(d.size * d.scale - want);
+            distance = std::abs(d.size * d.scale - sizePx);
         } else {
             const int lo = (d.type == Dir::Type::Scalable ? d.minSize : d.size - d.threshold) * d.scale;
             const int hi = (d.type == Dir::Type::Scalable ? d.maxSize : d.size + d.threshold) * d.scale;
-            distance = want < lo ? lo - want : want > hi ? want - hi : 0;
+            distance = sizePx < lo ? lo - sizePx : sizePx > hi ? sizePx - hi : 0;
         }
         if (distance >= bestDistance) continue;
 
@@ -145,13 +143,13 @@ std::string IconTheme::lookup(const Theme& theme, const std::string& name, int s
 }
 
 std::string IconTheme::find(const std::vector<std::string>& names, int sizePx) const {
+    // names outer, themes inner: a specific icon from a parent theme beats a generic one from ours
     for (const std::string& name : names) {
         for (const Theme& theme : chain_) {
             std::string path = lookup(theme, name, sizePx);
             if (!path.empty()) return path;
         }
     }
-    // Last resort from the spec: unthemed icons in /usr/share/pixmaps.
     std::error_code ec;
     for (const std::string& name : names) {
         for (const char* ext : {".png", ".svg"}) {
@@ -162,4 +160,4 @@ std::string IconTheme::find(const std::vector<std::string>& names, int sizePx) c
     return {};
 }
 
-}  // namespace fe::linux_fs
+}  // namespace fe

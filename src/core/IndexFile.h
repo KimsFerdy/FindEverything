@@ -1,28 +1,23 @@
 #pragma once
 
-#include "core/Index.h"
-
 #include <cstdint>
 #include <string>
 
+#include "core/Index.h"
+
 namespace fe {
 
-// Binary index file: a header followed by the raw records and the name pool,
-// exactly as they sit in memory, so loading is one big sequential read.
-//
-// Not portable between machines with different endianness or struct layout;
-// the header records both, and a mismatching file is simply rejected (we rescan).
+// on-disk index: header + raw records + name pool, basically a memory dump.
+// not portable across machines, the header checks layout/endianness and we just rescan if it doesn't match.
 struct IndexFileInfo {
-    int64_t createdAt = 0;  // unix seconds when the scan finished
-    std::string source;     // what was scanned (roots), to detect a config change
+    int64_t createdAt = 0;  // unix seconds
+    std::string source;     // what got scanned, so we notice when settings change
 };
 
-// Writes to "<path>.tmp", then renames over <path>. rename() is atomic on Linux,
-// so readers see either the old file or the new one, never a half-written one.
+// writes <path>.tmp then renames over <path>. rename is atomic so we never end up with half a file
 bool saveIndex(const Index& index, const std::string& path, const std::string& source);
 
-// Returns false (leaving `index` empty) if the file is missing, from another
-// version, or corrupt.
+// false (and empty index) if missing, old version or corrupt
 bool loadIndex(Index& index, const std::string& path, IndexFileInfo* info = nullptr);
 
 }  // namespace fe

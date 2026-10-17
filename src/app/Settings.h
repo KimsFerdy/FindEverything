@@ -1,42 +1,49 @@
 #pragma once
 
-#include "platform/Scanner.h"
-
 #include <string>
 #include <vector>
 
+#include "platform/Scanner.h"
+
 namespace fe {
 
-// User preferences, stored as a small INI-style text file
-// (~/.config/findeverything/settings.ini). Plain text on purpose: you can read
-// and edit it by hand, and unknown keys are ignored.
+struct WindowGeometry {
+    int x = -1, y = -1;  // -1 = let the window manager pick
+    int width = 1100, height = 700;
+    bool maximized = false;
+
+    bool operator==(const WindowGeometry&) const = default;
+};
+
+// ~/.config/findeverything/settings.ini, plain key = value so you can edit it by hand
 struct Settings {
     enum class Theme { System, Dark, Light };
 
-    // General
-    bool launchAtLogin = false;   // mirrored from the OS autostart entry, not stored
-    bool rescanOnStartup = true;  // false: trust the saved index until F5
+    bool launchAtLogin = false;  // not in the ini, mirrors the autostart file
+    bool startInTray = true;     // at login: no window, just the tray icon
+    bool trayIcon = true;
+    bool closeToTray = true;  // closing the window keeps us running in the tray
+    bool rescanOnStartup = true;
 
-    // Indexes
-    std::vector<std::string> excludedVolumes;  // mount points the user unticked
-    std::vector<std::string> excludedFolders;  // absolute paths left out of the index
+    std::vector<std::string> excludedVolumes;  // mount points that got unticked
+    std::vector<std::string> excludedFolders;
 
-    // Appearance
     Theme theme = Theme::System;
     bool customAccent = false;
     float accent[3] = {0.12f, 0.62f, 0.87f};
     float fontZoom = 1.0f;
 
+    WindowGeometry window;
+
     bool operator==(const Settings&) const = default;
 };
 
-Settings loadSettings();  // defaults for anything missing
+Settings loadSettings();
 bool saveSettings(const Settings& settings);
 
-// What to scan given the settings: every disk not unticked, minus excluded folders.
+// every disk that isn't unticked, minus excluded folders
 ScanOptions scanOptionsFor(const Settings& settings);
-// A description of those options, stored in the index cache: a cache built
-// with different options is ignored. Shared by the GUI and fe-cli.
+// stored in the index cache so a cache built with other options gets ignored. gui + cli share it
 std::string scanSourceFor(const ScanOptions& options, const Settings& settings);
 
 }  // namespace fe

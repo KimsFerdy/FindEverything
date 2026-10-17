@@ -1,4 +1,4 @@
-#include "platform/linux/Process.h"
+#include "platform/Process.h"
 
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -10,9 +10,8 @@ namespace fe::posix {
 
 namespace {
 
-// exec wants a NULL-terminated char* array. Built *before* fork(), because after
-// fork() in a multi-threaded program the child may only call async-signal-safe
-// functions (no malloc!) until it execs.
+// build argv before fork(). after fork in a threaded process the child can only call
+// async-signal-safe stuff (no malloc) until exec. claude helped me get this part right
 std::vector<char*> toArgv(const std::vector<std::string>& args) {
     std::vector<char*> out;
     for (const std::string& a : args) out.push_back(const_cast<char*>(a.c_str()));
@@ -20,8 +19,7 @@ std::vector<char*> toArgv(const std::vector<std::string>& args) {
     return out;
 }
 
-// In the child: point stdin/stderr (and stdout unless captured) at /dev/null and
-// close every other inherited fd (our X11 socket, index files...).
+// child side: stdio to /dev/null (except captured stdout), close every other fd we inherited
 void sanitizeChildFds(bool keepStdout) {
     int devnull = open("/dev/null", O_RDWR);
     if (devnull >= 0) {
@@ -46,18 +44,17 @@ bool spawnDetached(const std::vector<std::string>& args) {
     if (args.empty()) return false;
     std::vector<char*> argv = toArgv(args);
 
-    // Double fork: the middle child exits at once, so the grandchild is adopted
-    // by init (PID 1) which reaps it. Otherwise every opened file would leave a
-    // "zombie" process behind until we called waitpid() on it.
+    // double fork: middle child exits right away, grandchild gets adopted by init.
+    // no zombies left behind and we never have to waitpid() on it
     pid_t child = fork();
     if (child < 0) return false;
     if (child == 0) {
-        setsid();  // own session: closing our terminal won't kill it
+        setsid();
         pid_t grandchild = fork();
         if (grandchild != 0) _exit(grandchild < 0 ? 1 : 0);
         sanitizeChildFds(false);
         execvp(argv[0], argv.data());
-        _exit(127);  // only reached if exec failed
+        _exit(127);
     }
     return waitExitCode(child) == 0;
 }
@@ -66,7 +63,7 @@ int runCapture(const std::vector<std::string>& args, std::string* output) {
     if (args.empty()) return -1;
     std::vector<char*> argv = toArgv(args);
 
-    int pipeFds[2];  // [0] = read end, [1] = write end
+    int pipeFds[2];
     if (pipe2(pipeFds, O_CLOEXEC) != 0) return -1;
 
     pid_t child = fork();
@@ -76,13 +73,13 @@ int runCapture(const std::vector<std::string>& args, std::string* output) {
         return -1;
     }
     if (child == 0) {
-        dup2(pipeFds[1], STDOUT_FILENO);  // dup2'd fds don't inherit O_CLOEXEC
+        dup2(pipeFds[1], STDOUT_FILENO);  // dup2 clears CLOEXEC on the new fd
         sanitizeChildFds(true);
         execvp(argv[0], argv.data());
         _exit(127);
     }
 
-    close(pipeFds[1]);  // otherwise read() never sees EOF
+    close(pipeFds[1]);  // or read() never hits EOF
     char buf[4096];
     ssize_t n;
     while ((n = read(pipeFds[0], buf, sizeof buf)) != 0) {

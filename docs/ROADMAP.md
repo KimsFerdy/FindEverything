@@ -26,6 +26,16 @@
 - [ ] fanotify when running as root / with a helper (`FAN_MARK_FILESYSTEM`, no per-folder watches)
 - [ ] notice changes made while the app wasn't running without a full rescan (compare dir mtimes)
 
+## 0.3 ideas
+- [ ] "Search with FindEverything" in the file manager's right-click menu (folder or empty space):
+      opens FindEverything scoped to that folder (`--search "<folder>/ "`). nemo action file in
+      ~/.local/share/nemo/actions, nautilus script, dolphin service menu; toggle in Preferences
+- [ ] quick preview pane (space: image thumbnail / start of a text file / folder size)
+- [ ] recently opened + rank often-opened files higher
+- [ ] big files & duplicates view
+- [ ] drag results out to other apps (xdnd)
+- [ ] search inside files (`content:`)
+
 ## Later
 - [ ] persist sort orders in the cache (skip the ~0.5 s rebuild on startup)
 - [ ] `mmap` the index file

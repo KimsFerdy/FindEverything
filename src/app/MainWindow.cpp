@@ -97,22 +97,10 @@ MainWindow::~MainWindow() {
 void MainWindow::start() {
     cachePath_ = indexCachePath();
     scanSource_ = joinLines(defaultRoots());
-
-    // Show yesterday's index right away (a sequential read of a few dozen MB),
-    // then refresh it. Without live updates (M3) the cache can be out of date,
-    // so the rescan is what makes results trustworthy again.
-    if (!cachePath_.empty()) {
-        auto index = std::make_unique<Index>();
-        IndexFileInfo info;
-        if (loadIndex(*index, cachePath_, &info) && info.source == scanSource_) {
-            cachedIndexTime_ = info.createdAt;
-            adoptIndex(std::move(index));
-        }
-    }
-    startIndexing();
+    startIndexing(/*loadCacheFirst=*/true);
 }
 
-void MainWindow::startIndexing() {
+void MainWindow::startIndexing(bool loadCacheFirst) {
     if (scanning_) return;
     if (scanThread_.joinable()) scanThread_.join();  // previous scan, already finished
 
@@ -123,7 +111,28 @@ void MainWindow::startIndexing() {
     scanStart_ = std::chrono::steady_clock::now();
 
     // The old index stays searchable while the new one is built.
-    scanThread_ = std::thread([this, cachePath = cachePath_, source = scanSource_] {
+    scanThread_ = std::thread([this, loadCacheFirst, cachePath = cachePath_, source = scanSource_] {
+        // Derive the path cache and sort orders here too, so the UI never stalls.
+        auto publish = [this](std::unique_ptr<Index> index, int64_t cachedAt) {
+            auto snapshot = std::make_unique<IndexSnapshot>();
+            snapshot->index = std::move(index);
+            snapshot->paths.build(*snapshot->index);
+            snapshot->sorts.build(*snapshot->index, snapshot->paths);
+            snapshot->cachedAt = cachedAt;
+            std::lock_guard lock(pendingMutex_);
+            pending_ = std::move(snapshot);
+        };
+
+        // Show the last saved index right away, then refresh it. Without live
+        // updates (M3) the cache can be out of date; the rescan fixes that.
+        if (loadCacheFirst && !cachePath.empty()) {
+            auto cached = std::make_unique<Index>();
+            IndexFileInfo info;
+            if (loadIndex(*cached, cachePath, &info) && info.source == source) {
+                publish(std::move(cached), info.createdAt);
+            }
+        }
+
         auto index = std::make_unique<Index>();
         ScanOptions opts;
         opts.roots = defaultRoots();
@@ -132,18 +141,17 @@ void MainWindow::startIndexing() {
 
         // Saved from this thread so the UI never waits for the disk.
         if (!cachePath.empty()) saveIndex(*index, cachePath, source);
-
-        std::lock_guard lock(pendingMutex_);
-        pending_ = std::move(index);
+        publish(std::move(index), 0);
     });
 }
 
-void MainWindow::adoptIndex(std::unique_ptr<Index> index) {
+void MainWindow::adoptIndex(std::unique_ptr<IndexSnapshot> snapshot) {
     // Keep the same row selected across the swap (record ids change between scans).
     std::string selectedPath = (index_ && selectedRow_ >= 0) ? index_->fullPath(results_[selectedRow_]) : "";
 
-    index_ = std::move(index);
-    paths_.build(*index_);
+    index_ = std::move(snapshot->index);
+    paths_ = std::move(snapshot->paths);
+    sorts_ = std::move(snapshot->sorts);
     runSearch();
 
     if (selectedPath.empty()) return;
@@ -172,9 +180,20 @@ void MainWindow::setZoom(float zoom) {
 void MainWindow::runSearch() {
     if (!index_) return;
     auto t0 = std::chrono::steady_clock::now();
-    results_ = search(*index_, parseQuery(queryBuf_, searchOptions_), 0, &paths_);
+    std::vector<RecordId> matches = search(*index_, parseQuery(queryBuf_, searchOptions_), 0, &paths_);
+    results_ = sortResults(matches, index_->size(), sorts_, sortKey_, sortDescending_);
     searchMs_ = msSince(t0);
     selectedRow_ = -1;
+}
+
+void MainWindow::applySort() {
+    if (!index_) return;
+    const RecordId selectedId = selectedRow_ >= 0 ? results_[selectedRow_] : kNoParent;
+    results_ = sortResults(results_, index_->size(), sorts_, sortKey_, sortDescending_);
+    if (selectedId != kNoParent) {
+        selectedRow_ = static_cast<int>(std::find(results_.begin(), results_.end(), selectedId) - results_.begin());
+        scrollToSelected_ = true;
+    }
 }
 
 void MainWindow::setStatus(std::string message) {
@@ -210,10 +229,13 @@ void MainWindow::draw() {
     {
         std::lock_guard lock(pendingMutex_);
         if (pending_) {
+            const bool fresh = pending_->cachedAt == 0;
+            cachedIndexTime_ = pending_->cachedAt;
             adoptIndex(std::move(pending_));
-            scanning_ = false;
-            cachedIndexTime_ = 0;
-            scanSeconds_ = msSince(scanStart_) / 1000.0;
+            if (fresh) {
+                scanning_ = false;
+                scanSeconds_ = msSince(scanStart_) / 1000.0;
+            }
         }
     }
 
@@ -365,14 +387,31 @@ void MainWindow::handleKeyboard() {
 void MainWindow::drawResultsTable() {
     const float statusBarHeight = showStatusBar_ ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
     const ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter |
-                                  ImGuiTableFlags_BordersV | ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable;
+                                  ImGuiTableFlags_BordersV | ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable |
+                                  ImGuiTableFlags_Sortable;
     if (!ImGui::BeginTable("results", kColumnCount, flags, ImVec2(0, -statusBarHeight))) return;
 
     ImGui::TableSetupScrollFreeze(0, 1);  // keep header row visible
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide, 2.0f);
-    ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6);
-    ImGui::TableSetupColumn("Date Modified", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9);
+    // The last argument (user id) tells us which SortKey a clicked header means.
+    const float em = ImGui::GetFontSize();
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide |
+                                        ImGuiTableColumnFlags_DefaultSort, 2.0f, static_cast<ImGuiID>(SortKey::Name));
+    ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 3.0f, static_cast<ImGuiID>(SortKey::Path));
+    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending,
+                            em * 6, static_cast<ImGuiID>(SortKey::Size));
+    ImGui::TableSetupColumn("Date Modified",
+                            ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, em * 9,
+                            static_cast<ImGuiID>(SortKey::Modified));
+
+    // A header click marks the sort specs dirty; re-order the results once.
+    if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsDirty) {
+        if (specs->SpecsCount > 0) {
+            sortKey_ = static_cast<SortKey>(specs->Specs[0].ColumnUserID);
+            sortDescending_ = specs->Specs[0].SortDirection == ImGuiSortDirection_Descending;
+        }
+        specs->SpecsDirty = false;
+        applySort();
+    }
 
     // Columns can be hidden from the View menu *or* by right-clicking the header,
     // so sync both ways: menu change -> table, otherwise table -> menu checkmarks.
@@ -463,7 +502,8 @@ void MainWindow::drawStatusBar() {
     if (showMessage) {
         ImGui::TextUnformatted(statusMessage_.c_str());
     } else if (!index_) {
-        ImGui::Text("Indexing...  %llu objects", scanned);
+        if (scanned == 0) ImGui::TextUnformatted("Loading index...");
+        else ImGui::Text("Indexing...  %llu objects", scanned);
     } else if (scanning_) {
         std::string age = cachedIndexTime_ ? "index from " + formatAge(cachedIndexTime_) + ", updating" : "rescanning";
         ImGui::Text("%zu objects   ·   %zu results   ·   %s... %llu", index_->size(), results_.size(), age.c_str(),

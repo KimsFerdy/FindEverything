@@ -28,6 +28,7 @@ add_library(fe_core STATIC
     src/core/PathCache.cpp
     src/core/Query.cpp
     src/core/Search.cpp
+    src/core/Sort.cpp
 )
 target_include_directories(fe_core PUBLIC src)
 target_link_libraries(fe_core PUBLIC Threads::Threads)

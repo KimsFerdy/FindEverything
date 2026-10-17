@@ -20,7 +20,10 @@ Each milestone ends with something you can run.
 - [x] Menu bar: File / Edit / View / Search / Help, rescan (F5), zoom, column toggles
 - [x] Match case, whole word, match path (folder path cache), files/folders only
 - [ ] Multi-select (Ctrl/Shift+click) + Select All
-- [ ] Click a column header to sort (`ImGuiTableFlags_Sortable`)
+- [x] Click a column header to sort: pre-sorted orders per column (built in the
+      background, ~0.5 s for 500k), results re-ordered with a bitmap walk (~3 ms)
+- [ ] Natural sort ("file2" before "file10")
+- [ ] Persist sort orders in the cache file so startup skips the ~0.5 s rebuild
 - [ ] Remember window size and column widths
 - [ ] Follow theme changes live (portal `SettingChanged` signal)
 - [ ] Non-Latin file names: upgrade to ImGui 1.92 dynamic fonts + fallback fonts

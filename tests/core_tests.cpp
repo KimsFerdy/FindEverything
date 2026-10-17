@@ -4,6 +4,7 @@
 #include "core/IndexFile.h"
 #include "core/Query.h"
 #include "core/Search.h"
+#include "core/Sort.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -119,7 +120,35 @@ static void testIndexFile() {
     fs::remove(path);
 }
 
+static void testSort() {
+    fe::Index idx;
+    fe::RecordId root = idx.add(fe::kNoParent, "/", fe::kIsDir, 0, 0);
+    fe::RecordId b = idx.add(root, "b", fe::kIsDir, 0, 50);
+    fe::RecordId zip = idx.add(b, "a.zip", 0, 300, 10);
+    fe::RecordId apple = idx.add(root, "Apple.txt", 0, 100, 30);
+    fe::RecordId cat = idx.add(root, "cat.txt", 0, 200, 20);
+    fe::PathCache paths;
+    paths.build(idx);
+    fe::SortOrders sorts;
+    sorts.build(idx, paths);
+
+    using V = std::vector<fe::RecordId>;
+    const V all = {root, b, zip, apple, cat};
+    auto sorted = [&](const V& r, fe::SortKey key, bool desc = false) {
+        return fe::sortResults(r, idx.size(), sorts, key, desc);
+    };
+    // Name: folders first, then case-insensitive A..Z.
+    CHECK((sorted(all, fe::SortKey::Name) == V{root, b, zip, apple, cat}));
+    CHECK((sorted({cat, apple}, fe::SortKey::Name) == V{apple, cat}));
+    CHECK((sorted({cat, apple}, fe::SortKey::Name, true) == V{cat, apple}));
+    CHECK((sorted({zip, apple, cat}, fe::SortKey::Size, true) == V{zip, cat, apple}));
+    CHECK((sorted({zip, apple, cat}, fe::SortKey::Modified) == V{zip, cat, apple}));
+    // Path: "/" (apple, cat) before "/b" (zip).
+    CHECK((sorted({zip, cat, apple}, fe::SortKey::Path) == V{apple, cat, zip}));
+}
+
 int main() {
+    testSort();
     testQueryParsing();
     testFullPath();
     testSearch();

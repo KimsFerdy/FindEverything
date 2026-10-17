@@ -3,6 +3,7 @@
 #include "core/Index.h"
 #include "core/PathCache.h"
 #include "core/Query.h"
+#include "core/Sort.h"
 #include "platform/Scanner.h"
 
 #include <chrono>
@@ -13,6 +14,15 @@
 #include <vector>
 
 namespace fe {
+
+// One complete version of the index plus everything derived from it. Built
+// entirely on the background thread, then handed to the UI in one move.
+struct IndexSnapshot {
+    std::unique_ptr<Index> index;
+    PathCache paths;
+    SortOrders sorts;
+    int64_t cachedAt = 0;  // >0: loaded from the cache file (unix time); 0: fresh scan
+};
 
 // The whole UI: menu bar, search box, results table, status bar.
 // Indexing runs on a background thread; the finished Index is handed over to the
@@ -26,7 +36,7 @@ public:
 
     // Loads the cached index (instant results), then rescans in the background.
     void start();
-    void startIndexing();
+    void startIndexing(bool loadCacheFirst = false);
     void draw();  // call once per frame between ImGui::NewFrame() and ImGui::Render()
 
     // Requests the main loop acts on (they involve GLFW / the font texture).
@@ -35,8 +45,9 @@ public:
     bool consumeFontZoomChange();
 
 private:
-    void adoptIndex(std::unique_ptr<Index> index);
+    void adoptIndex(std::unique_ptr<IndexSnapshot> snapshot);
     void runSearch();
+    void applySort();
     void handleKeyboard();
     void drawMenuBar();
     void drawResultsTable();
@@ -51,10 +62,11 @@ private:
     void setZoom(float zoom);
     void setStatus(std::string message);
 
-    // --- index (UI thread owns index_; scanner thread fills pending_)
+    // --- index (UI thread owns index_/paths_/sorts_; scanner thread fills pending_)
     std::unique_ptr<Index> index_;
     PathCache paths_;
-    std::unique_ptr<Index> pending_;
+    SortOrders sorts_;
+    std::unique_ptr<IndexSnapshot> pending_;
     std::mutex pendingMutex_;
     std::thread scanThread_;
     ScanProgress progress_;
@@ -69,8 +81,10 @@ private:
     char queryBuf_[512] = {};
     SearchOptions searchOptions_;
     bool focusSearch_ = true;
-    std::vector<RecordId> results_;
+    std::vector<RecordId> results_;  // matches, in display (sorted) order
     double searchMs_ = 0;
+    SortKey sortKey_ = SortKey::Name;
+    bool sortDescending_ = false;
 
     int selectedRow_ = -1;  // index into results_
     bool scrollToSelected_ = false;

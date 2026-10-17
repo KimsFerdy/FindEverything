@@ -10,6 +10,16 @@
 - tombstones + compaction, changes are saved every minute and on quit
 - Preferences > Indexes: "Keep the index up to date while running"
 
+### Global shortcut
+- press a shortcut anywhere to show / hide FindEverything (Preferences > General, off by default).
+  registered as a Cinnamon / GNOME custom shortcut running `FindEverything --toggle`
+- single instance: launching again (or `--search`) talks to the running app over D-Bus
+
+### Search
+- filter dropdown: Audio, Video, Pictures, Documents, Code, Archives, Executables
+- wildcards `*.cpp`, `regex:`, `size:>100mb`, `dm:today` / `dm:week` / `dm:2026-10-17` / ranges, `path:`
+- query errors (bad regex etc) show in the status bar instead of silently matching nothing
+
 ### Other
 - Help > Check for Updates (asks GitHub, only when you click it)
 - lower memory use after scans (~110 MB less)

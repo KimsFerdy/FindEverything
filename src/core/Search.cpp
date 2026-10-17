@@ -1,5 +1,7 @@
 #include "core/Search.h"
 
+#include <regex.h>
+
 #include <algorithm>
 #include <cctype>
 #include <thread>
@@ -25,34 +27,70 @@ bool contains(std::string_view haystack, std::string_view term, bool wholeWord) 
     return false;
 }
 
-// one per thread, owns the scratch buffer for building full paths
+bool hasExtension(std::string_view lowerName, const std::vector<std::string>& exts) {
+    const size_t dot = lowerName.rfind('.');
+    if (dot == std::string_view::npos) return false;
+    return std::find(exts.begin(), exts.end(), lowerName.substr(dot + 1)) != exts.end();
+}
+
+// one per thread: scratch buffers + its own compiled regexes (glibc locks a shared regex_t while matching)
 class Matcher {
 public:
     Matcher(const Index& index, const Query& query, const PathCache* paths)
-        : index_(index), q_(query), paths_(query.matchPath ? paths : nullptr) {}
+        : index_(index), q_(query), paths_(query.matchPath ? paths : nullptr) {
+        const int flags = REG_EXTENDED | REG_NOSUB | (q_.matchCase ? 0 : REG_ICASE);
+        for (const std::string& p : q_.includeRegex) regcomp(&include_.emplace_back(), p.c_str(), flags);
+        for (const std::string& p : q_.excludeRegex) regcomp(&exclude_.emplace_back(), p.c_str(), flags);
+    }
+    ~Matcher() {
+        for (regex_t& re : include_) regfree(&re);
+        for (regex_t& re : exclude_) regfree(&re);
+    }
+    Matcher(const Matcher&) = delete;
+    Matcher& operator=(const Matcher&) = delete;
 
+    // cheap checks first, regex last
     bool operator()(RecordId id) {
         const FileRecord& r = index_.record(id);
         if (r.flags & kIsDeleted) return false;
         const bool isDir = r.flags & kIsDir;
         if (q_.filesOnly && isDir) return false;
         if (q_.foldersOnly && !isDir) return false;
+        if (q_.hasSize() && (isDir || r.size < q_.minSize || r.size >= q_.maxSize)) return false;
+        if (q_.hasTime() && (r.mtime < q_.minTime || r.mtime >= q_.maxTime)) return false;
 
-        std::string_view text = haystack(id);
+        if (!q_.extensions.empty() || !q_.filterExtensions.empty() || q_.filterExecutables) {
+            if (isDir) return false;
+            const std::string_view name = index_.lowerName(id);
+            if (!q_.extensions.empty() && !hasExtension(name, q_.extensions)) return false;
+            if (q_.filterExecutables) {
+                if (!(r.flags & kIsExecutable) && !hasExtension(name, q_.filterExtensions)) return false;
+            } else if (!q_.filterExtensions.empty() && !hasExtension(name, q_.filterExtensions)) {
+                return false;
+            }
+        }
+
+        const std::string_view text = haystack(id);
         for (const std::string& term : q_.include) {
             if (!contains(text, term, q_.wholeWord)) return false;
         }
         for (const std::string& term : q_.exclude) {
             if (contains(text, term, q_.wholeWord)) return false;
         }
-
-        if (!q_.extensions.empty()) {
-            if (isDir) return false;
-            std::string_view name = index_.lowerName(id);
-            size_t dot = name.rfind('.');
-            if (dot == std::string_view::npos) return false;
-            std::string_view ext = name.substr(dot + 1);
-            if (std::find(q_.extensions.begin(), q_.extensions.end(), ext) == q_.extensions.end()) return false;
+        for (const std::string& glob : q_.includeGlobs) {
+            if (!globMatch(glob, text)) return false;
+        }
+        for (const std::string& glob : q_.excludeGlobs) {
+            if (globMatch(glob, text)) return false;
+        }
+        if (!include_.empty() || !exclude_.empty()) {
+            regexText_.assign(text);  // regexec wants a c string
+            for (const regex_t& re : include_) {
+                if (regexec(&re, regexText_.c_str(), 0, nullptr, 0) != 0) return false;
+            }
+            for (const regex_t& re : exclude_) {
+                if (regexec(&re, regexText_.c_str(), 0, nullptr, 0) == 0) return false;
+            }
         }
         return true;
     }
@@ -74,6 +112,8 @@ private:
     const Query& q_;
     const PathCache* paths_;
     std::string scratch_;
+    std::string regexText_;
+    std::vector<regex_t> include_, exclude_;
 };
 
 }  // namespace

@@ -1,6 +1,7 @@
 // no framework yet, CHECK + exit code is enough for now
 
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 
 #include "core/Index.h"
@@ -27,7 +28,7 @@ static void testQueryParsing() {
     CHECK(q.exclude.size() == 1 && q.exclude[0] == "tmp");
     CHECK(q.extensions.size() == 2 && q.extensions[0] == "jpg" && q.extensions[1] == "png");
     CHECK(q.foldersOnly && !q.filesOnly);
-    CHECK(fe::parseQuery("   ").empty());
+    CHECK(fe::parseQuery("   ").include.empty());
 }
 
 static void testFullPath() {
@@ -184,7 +185,70 @@ static void testLiveMutations() {
     CHECK(foundRenamed);
 }
 
+static void testSyntax() {
+    CHECK(fe::globMatch("*.cpp", "main.cpp"));
+    CHECK(!fe::globMatch("*.cpp", "main.cpp.bak"));
+    CHECK(fe::globMatch("report_??.pdf", "report_07.pdf"));
+    CHECK(!fe::globMatch("report_??.pdf", "report_7.pdf"));
+    CHECK(fe::globMatch("a*b*c", "aXXbYYc"));
+    CHECK(fe::globMatch("*", ""));
+
+    // 2026-10-17 12:00 local, so "today" etc are stable
+    std::tm tm{};
+    tm.tm_year = 126, tm.tm_mon = 9, tm.tm_mday = 17, tm.tm_hour = 12, tm.tm_isdst = -1;
+    const int64_t now = std::mktime(&tm);
+    auto at = [](int y, int m, int d, int h) {
+        std::tm t{};
+        t.tm_year = y - 1900, t.tm_mon = m - 1, t.tm_mday = d, t.tm_hour = h, t.tm_isdst = -1;
+        return static_cast<int64_t>(std::mktime(&t));
+    };
+
+    fe::Index idx;
+    fe::RecordId root = idx.add(fe::kNoParent, "/", fe::kIsDir, 0, 0);
+    fe::RecordId music = idx.add(root, "music", fe::kIsDir, 0, at(2026, 10, 17, 9));
+    idx.add(music, "song.mp3", 0, 5 << 20, at(2026, 10, 17, 9));           // 5 MB, today
+    idx.add(music, "cover.JPG", 0, 300 << 10, at(2026, 10, 16, 20));       // 300 KB, yesterday
+    idx.add(root, "main.cpp", 0, 2 << 10, at(2026, 9, 1, 10));             // 2 KB, last month
+    idx.add(root, "main.cpp.bak", 0, 2 << 10, at(2025, 1, 1, 10));         // last year
+    idx.add(root, "IMG_2041.png", 0, 1 << 30, at(2026, 10, 10, 10));       // 1 GB
+    idx.add(root, "run-me", fe::kIsExecutable, 100, at(2026, 10, 17, 11));  // exec bit, no extension
+    fe::PathCache paths;
+    paths.build(idx);
+
+    auto count = [&](const char* text, fe::Filter filter = fe::Filter::All) {
+        fe::SearchOptions opts;
+        opts.filter = filter;
+        return fe::search(idx, fe::parseQuery(text, opts, now), 1, &paths).size();
+    };
+    CHECK(count("*.cpp") == 1);
+    CHECK(count("!*.bak main") == 1);
+    CHECK(count("regex:^img_[0-9]{4}") == 1);
+    CHECK(count("regex:^IMG", fe::Filter::All) == 1);  // case-insensitive by default
+    CHECK(count("!regex:\\.(cpp|bak)$ file:") == 4);
+    CHECK(count("size:>1mb") == 2);
+    CHECK(count("size:<4kb") == 3);  // main.cpp, .bak, run-me (folders never match size:)
+    CHECK(count("size:100kb..1mb") == 1);
+    CHECK(count("dm:today") == 3);  // music folder, song, run-me
+    CHECK(count("dm:yesterday") == 1);
+    CHECK(count("dm:week file:") == 3);  // last 7 days = after oct 10 12:00, IMG (10:00 that day) is just out
+    CHECK(count("dm:2026-10-16") == 1);
+    CHECK(count("dm:>2026-10-16 file:") == 2);
+    CHECK(count("dm:2026-01-01..2026-10-10 file:") == 2);  // main.cpp + IMG (on the 10th, end day included)
+    CHECK(count("", fe::Filter::Audio) == 1);
+    CHECK(count("", fe::Filter::Pictures) == 2);
+    CHECK(count("", fe::Filter::Code) == 1);
+    CHECK(count("", fe::Filter::Executables) == 1);
+    CHECK(count("cover", fe::Filter::Audio) == 0);
+    CHECK(count("path: music cover") == 1);
+
+    CHECK(fe::parseQuery("regex:([", {}, now).error.find("invalid regex") == 0);
+    CHECK(fe::parseQuery("size:>lots", {}, now).error.find("size") != std::string::npos);
+    CHECK(fe::parseQuery("dm:someday", {}, now).error.find("date") != std::string::npos);
+    CHECK(fe::parseQuery("regex:([ song", {}, now).include.size() == 1);  // bad term skipped, rest still works
+}
+
 int main() {
+    testSyntax();
     testLiveMutations();
     testSort();
     testQueryParsing();

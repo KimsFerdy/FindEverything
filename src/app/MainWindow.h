@@ -93,6 +93,7 @@ private:
     bool queryReplaced_ = false;     // setQuery() from outside, the input needs to reload
     std::vector<RecordId> results_;  // already sorted
     double searchMs_ = 0;
+    std::string queryError_;  // bad regex / size / date in the query
     SortKey sortKey_ = SortKey::Name;
     bool sortDescending_ = false;
 

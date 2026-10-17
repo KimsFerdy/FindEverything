@@ -315,7 +315,9 @@ void MainWindow::applyPreferences(Settings next) {
 void MainWindow::runSearch() {
     if (!index_) return;
     auto t0 = std::chrono::steady_clock::now();
-    std::vector<RecordId> matches = search(*index_, parseQuery(queryBuf_, searchOptions_), 0, &paths_);
+    const Query query = parseQuery(queryBuf_, searchOptions_);
+    queryError_ = query.error;
+    std::vector<RecordId> matches = search(*index_, query, 0, &paths_);
     results_ = sortResults(matches, index_->size(), sorts_, sortKey_, sortDescending_);
     searchMs_ = msSince(t0);
     selectedRow_ = -1;
@@ -371,6 +373,20 @@ void MainWindow::draw() {
     drawMenuBar();
     handleKeyboard();
 
+    // filter dropdown, then the search box filling the rest of the line
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+    if (ImGui::BeginCombo("##filter", filterName(searchOptions_.filter))) {
+        for (int f = 0; f < static_cast<int>(Filter::Count); ++f) {
+            const auto filter = static_cast<Filter>(f);
+            if (ImGui::Selectable(filterName(filter), searchOptions_.filter == filter)) {
+                searchOptions_.filter = filter;
+                runSearch();
+                focusSearch_ = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
     // an active InputText edits its own copy and ignores changes to our buffer, so deactivate it
     // and focus it again, that makes imgui reload the text
@@ -383,7 +399,8 @@ void MainWindow::draw() {
         ImGui::SetKeyboardFocusHere();
         focusSearch_ = false;
     }
-    if (ImGui::InputTextWithHint("##query", "Search  (e.g.  report ext:pdf;docx !old)", queryBuf_, sizeof queryBuf_)) {
+    if (ImGui::InputTextWithHint("##query", "Search  (e.g.  report ext:pdf  *.cpp  size:>10mb  dm:today)", queryBuf_,
+                                 sizeof queryBuf_)) {
         runSearch();  // every keystroke, like Everything
     }
 
@@ -650,7 +667,11 @@ void MainWindow::drawStatusBar() {
     const bool showMessage = !statusMessage_.empty() && msSince(statusTime_) < 3000;
     const bool scanning = service_ && service_->scanning();
     const auto scanned = static_cast<unsigned long long>(service_ ? service_->scannedEntries() : 0);
-    if (showMessage) {
+    if (!queryError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230, 90, 80, 255));
+        ImGui::TextUnformatted(queryError_.c_str());
+        ImGui::PopStyleColor();
+    } else if (showMessage) {
         ImGui::TextUnformatted(statusMessage_.c_str());
     } else if (!index_) {
         if (scanned == 0)
@@ -707,9 +728,17 @@ void MainWindow::drawHelpPopups() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Search Syntax", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         static const char* kRows[][2] = {
-            {"foo bar", "name contains foo AND bar"},        {"\"foo bar\"", "exact phrase"},
-            {"!tmp", "name does NOT contain tmp"},           {"ext:jpg;png", "extension is jpg or png"},
-            {"file:  folder:", "only files / only folders"}, {"src/main", "a term with / matches the full path"},
+            {"foo bar", "name contains foo AND bar"},
+            {"\"foo bar\"", "exact phrase"},
+            {"!tmp", "NOT, works with everything below too"},
+            {"ext:jpg;png", "extension is jpg or png"},
+            {"*.cpp   report_??.pdf", "wildcards, match the whole name"},
+            {"regex:^img_[0-9]+", "regular expression (posix extended)"},
+            {"size:>100mb   size:1mb..1gb", "file size, b kb mb gb tb"},
+            {"dm:today  dm:week  dm:month", "date modified, also yesterday, year"},
+            {"dm:2026-10-17   dm:>2026-01-01", "a day, after / before a day, a..b ranges"},
+            {"file:   folder:", "only files / only folders"},
+            {"src/main   path:", "match the full path instead of the name"},
         };
         if (ImGui::BeginTable("syntax", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
             for (const auto& row : kRows) {

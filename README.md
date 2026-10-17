@@ -64,8 +64,14 @@ Binaries are x86_64, built on Linux Mint 22 (glibc 2.39). Checksums are in `SHA2
 | `"foo bar"`         | exact phrase                           |
 | `!tmp`              | name does not contain `tmp`            |
 | `ext:jpg;png`       | jpg or png files                       |
+| `*.cpp` `report_??` | wildcards, match the whole name        |
+| `regex:^img_\d+`    | regular expression                     |
+| `size:>100mb` `size:1mb..1gb` | file size                    |
+| `dm:today` `dm:week` `dm:2026-10-17` `dm:>2026-01-01` | date modified |
 | `file:` / `folder:` | only files / only folders              |
-| `src/main`          | a `/` in a term searches full paths    |
+| `src/main` `path:`  | search full paths instead of names     |
+
+Plus a filter dropdown next to the search box: Audio, Video, Pictures, Documents, Code, Archives, Executables.
 
 Search menu: match case `Ctrl+I`, whole word `Ctrl+B`, match path `Ctrl+U`. `F1` shows this in the app.
 
